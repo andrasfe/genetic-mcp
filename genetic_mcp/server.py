@@ -94,17 +94,22 @@ def initialize_llm_client() -> MultiModelClient:
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
 
+    # Get model configurations from environment
+    openai_model = os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
+    anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-3-opus-20240229")
+    openrouter_model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.2-3b-instruct")
+
     if not openai_key and not anthropic_key and not openrouter_key:
         raise ValueError("At least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY must be set")
 
     # Add available clients
     if openai_key:
-        client.add_client("openai", OpenAIClient(openai_key), is_default=True)
+        client.add_client("openai", OpenAIClient(openai_key, openai_model), is_default=True)
         client.add_client("gpt-4", OpenAIClient(openai_key, "gpt-4-turbo-preview"))
         client.add_client("gpt-3.5", OpenAIClient(openai_key, "gpt-3.5-turbo"))
 
     if anthropic_key:
-        anthropic_client = AnthropicClient(anthropic_key)
+        anthropic_client = AnthropicClient(anthropic_key, anthropic_model)
         if openai_key:
             anthropic_client.set_embedding_fallback(openai_key)
         client.add_client("anthropic", anthropic_client, is_default=not openai_key)
@@ -112,7 +117,7 @@ def initialize_llm_client() -> MultiModelClient:
 
     if openrouter_key:
         from .llm_client import OpenRouterClient
-        openrouter_client = OpenRouterClient(openrouter_key)
+        openrouter_client = OpenRouterClient(openrouter_key, openrouter_model)
         if openai_key:
             openrouter_client.set_embedding_fallback(openai_key)
         client.add_client("openrouter", openrouter_client, is_default=(not openai_key and not anthropic_key))

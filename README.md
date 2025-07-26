@@ -24,30 +24,35 @@ Built by a team of collaborative AI agents:
 
 ## Installation
 
-### Quick Install with Claude Desktop
+### Method 1: Quick Install with Claude MCP
 
 ```bash
-claude mcp add genetic-mcp -- uvx --from git+https://github.com/andrasfe/genetic-mcp.git genetic-mcp
+claude mcp add genetic-mcp \
+  -e OPENROUTER_API_KEY="your-api-key-here" \
+  -- uvx --from git+https://github.com/andrasfe/genetic-mcp.git genetic-mcp
 ```
 
-### Manual Installation
+This will automatically configure the server with your API key. The full configuration will be added to `~/.claude/claude_desktop_config.json`.
 
-1. **Clone and install:**
+### Method 2: Local Development Installation
+
+1. **Clone and install the package:**
 ```bash
 git clone https://github.com/andrasfe/genetic-mcp.git
 cd genetic-mcp
-pip install -e .
+uv pip install -e .  # or: pip install -e .
 ```
 
 2. **Configure in Claude Desktop:**
+
+Edit `~/.claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "genetic-mcp": {
-      "command": "python",
-      "args": ["-m", "genetic_mcp.server"],
+      "command": "genetic-mcp",
+      "args": [],
       "env": {
-        "OPENROUTER_API_KEY": "your-api-key",
         "GENETIC_MCP_DEBUG": "false",
         "GENETIC_MCP_TRANSPORT": "stdio"
       }
@@ -56,28 +61,71 @@ pip install -e .
 }
 ```
 
-### Run Locally from Current Directory
+Note: With local installation, the server will automatically use the `OPENROUTER_API_KEY` from your `.env` file.
 
+### Method 3: Run Without Installation
+
+From the project directory:
 ```bash
 # Using uv (recommended)
 uv run genetic-mcp
 
 # Or with Python directly
 python -m genetic_mcp.server
+```
 
-# Or if installed
-genetic-mcp
+Then configure Claude Desktop to use the local command:
+```json
+{
+  "mcpServers": {
+    "genetic-mcp": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/genetic-mcp", "run", "genetic-mcp"],
+      "env": {
+        "GENETIC_MCP_DEBUG": "false",
+        "GENETIC_MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}
 ```
 
 ## Configuration
 
-The project includes a `.env` file with OpenRouter API key configured.
+### API Keys
 
-Environment variables:
-- `OPENROUTER_API_KEY`: OpenRouter API key (configured)
-- `GENETIC_MCP_TRANSPORT`: Transport mode (stdio/http)
-- `GENETIC_MCP_DEBUG`: Enable debug logging
-- `GENETIC_MCP_GPU`: Enable GPU acceleration
+Create a `.env` file in the project root:
+```bash
+# Required: At least one API key
+OPENROUTER_API_KEY=your-openrouter-api-key
+OPENAI_API_KEY=your-openai-api-key        # Optional
+ANTHROPIC_API_KEY=your-anthropic-api-key  # Optional
+
+# LLM Model Configuration
+OPENROUTER_MODEL=meta-llama/llama-3.2-3b-instruct  # Default model for OpenRouter
+OPENAI_MODEL=gpt-4-turbo-preview                   # Default model for OpenAI
+ANTHROPIC_MODEL=claude-3-opus-20240229             # Default model for Anthropic
+```
+
+### Environment Variables
+
+#### API Configuration
+- `OPENROUTER_API_KEY`: OpenRouter API key (supports multiple models)
+- `OPENAI_API_KEY`: OpenAI API key (optional)
+- `ANTHROPIC_API_KEY`: Anthropic API key (optional)
+
+#### Model Selection
+- `OPENROUTER_MODEL`: Model to use with OpenRouter (default: `meta-llama/llama-3.2-3b-instruct`)
+  - Examples: `openai/gpt-4o`, `anthropic/claude-3.5-sonnet`, `google/gemini-2.0-flash-thinking-exp-1219:free`
+- `OPENAI_MODEL`: Model to use with OpenAI (default: `gpt-4-turbo-preview`)
+- `ANTHROPIC_MODEL`: Model to use with Anthropic (default: `claude-3-opus-20240229`)
+
+#### System Configuration
+- `GENETIC_MCP_TRANSPORT`: Transport mode (`stdio` for MCP, `http` for web)
+- `GENETIC_MCP_DEBUG`: Enable debug logging (`true`/`false`)
+- `GENETIC_MCP_GPU`: Enable GPU acceleration (`true`/`false`)
+- `WORKER_POOL_SIZE`: Number of parallel LLM workers (default: 5)
+- `SESSION_TTL_SECONDS`: Session timeout in seconds (default: 3600)
 
 ## MCP Tools
 
@@ -164,6 +212,50 @@ genetic_mcp/
 ├── llm_client.py       # Multi-model LLM support
 ├── gpu_*.py            # GPU acceleration modules
 └── tests/              # Comprehensive test suite
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **MCP installation fails with uvx**
+   - Use local installation method instead (Method 1)
+   - Ensure you're in the correct directory when running `uv pip install -e .`
+
+2. **"Command not found: genetic-mcp"**
+   - Verify installation: `which genetic-mcp`
+   - Check your Python environment is activated
+   - Try running with `python -m genetic_mcp.server` instead
+
+3. **OpenRouter API key errors**
+   - Ensure `.env` file exists in project root
+   - Check API key is valid and has credits
+   - Verify key format: `OPENROUTER_API_KEY=sk-or-v1-...`
+
+4. **MCP server not appearing in Claude Desktop**
+   - Restart Claude Desktop after editing config
+   - Check `~/.claude/claude_desktop_config.json` syntax
+   - Look for errors in Claude Desktop logs
+
+5. **"Failed to validate request" errors**
+   - This is normal during initialization
+   - The server needs proper MCP handshake before accepting tool calls
+
+### Debug Mode
+
+Enable debug logging to troubleshoot issues:
+```json
+{
+  "mcpServers": {
+    "genetic-mcp": {
+      "command": "genetic-mcp",
+      "args": [],
+      "env": {
+        "GENETIC_MCP_DEBUG": "true"
+      }
+    }
+  }
+}
 ```
 
 ## Documentation
