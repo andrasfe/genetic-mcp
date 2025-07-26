@@ -36,7 +36,7 @@ proc = subprocess.Popen(
     stderr=subprocess.PIPE,
     text=True,
     env=env,
-    cwd="/home/andras/genetic_mcp"
+    cwd=os.path.dirname(os.path.abspath(__file__))
 )
 
 # Send request

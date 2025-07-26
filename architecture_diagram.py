@@ -155,8 +155,10 @@ def create_architecture_diagram():
                 ha='center', va='center', fontsize=9, style='italic')
     
     plt.tight_layout()
-    plt.savefig('/home/andras/genetic_mcp/architecture_diagram.png', dpi=300, bbox_inches='tight')
-    plt.savefig('/home/andras/genetic_mcp/architecture_diagram.pdf', bbox_inches='tight')
+    import os
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plt.savefig(os.path.join(script_dir, 'architecture_diagram.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(script_dir, 'architecture_diagram.pdf'), bbox_inches='tight')
     print("Architecture diagram saved as architecture_diagram.png and architecture_diagram.pdf")
 
 if __name__ == "__main__":

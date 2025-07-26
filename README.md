@@ -29,7 +29,7 @@ Built by a team of collaborative AI agents:
 ```bash
 claude mcp add genetic-mcp \
   -e OPENROUTER_API_KEY="your-api-key-here" \
-  -- uvx --from git+https://github.com/andrasfe/genetic-mcp.git genetic-mcp
+  -- uvx --from git+https://github.com/YOUR_USERNAME/genetic-mcp.git genetic-mcp
 ```
 
 This will automatically configure the server with your API key. The full configuration will be added to `~/.claude/claude_desktop_config.json`.
@@ -38,7 +38,7 @@ This will automatically configure the server with your API key. The full configu
 
 1. **Clone and install the package:**
 ```bash
-git clone https://github.com/andrasfe/genetic-mcp.git
+git clone https://github.com/YOUR_USERNAME/genetic-mcp.git
 cd genetic-mcp
 uv pip install -e .  # or: pip install -e .
 ```
