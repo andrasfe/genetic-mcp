@@ -40,9 +40,9 @@ This MCP server implements a sophisticated genetic algorithm that evolves ideas 
 
 2. **Crossover (70% probability)**: LLM-guided idea combination
    ```
-   Parent 1: "Decentralized payment verification"
-   Parent 2: "Multi-agent coordination system"
-   Offspring: "Decentralized multi-agent payment network with distributed verification"
+   Parent 1: "Sustainable vertical farming"
+   Parent 2: "AI-powered crop monitoring"
+   Offspring: "AI-monitored vertical farming system with adaptive growth optimization"
    ```
 
 3. **Mutation (10% probability)**: Intelligent modifications
@@ -56,22 +56,22 @@ This MCP server implements a sophisticated genetic algorithm that evolves ideas 
 ### Example Evolution Flow
 
 ```
-Prompt: "Innovative payment solutions using agents"
+Prompt: "Innovative solutions for urban agriculture"
 
 Generation 0: 50 random ideas
-├── "Blockchain payment system" (fitness: 0.6)
-├── "AI agent negotiation" (fitness: 0.7)
-├── "Distributed ledger" (fitness: 0.5)
+├── "Rooftop hydroponic gardens" (fitness: 0.6)
+├── "Community seed sharing network" (fitness: 0.7)
+├── "Smart irrigation systems" (fitness: 0.5)
 └── ... 47 more ideas
 
 Generation 1: Best ideas combine
-├── "Blockchain + AI agents" (fitness: 0.8)
-├── "Distributed agent network" (fitness: 0.75)
+├── "Hydroponic + community sharing" (fitness: 0.8)
+├── "Smart rooftop networks" (fitness: 0.75)
 └── ... evolved population
 
 Generation 2-5: Further refinement
-└── Top idea: "Multi-agent payment ecosystem with cryptographic 
-    verification and distributed trust mechanisms" (fitness: 0.95)
+└── Top idea: "Community-driven rooftop hydroponic networks with 
+    smart resource sharing and automated climate control" (fitness: 0.95)
 ```
 
 ### Configuration Parameters
