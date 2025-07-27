@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import uuid
+from asyncio import TimeoutError
 from datetime import datetime, timedelta
 
 from .fitness import FitnessEvaluator
@@ -15,6 +16,7 @@ from .models import (
     GenerationRequest,
     GenerationResult,
     GeneticParameters,
+    Idea,
     Session,
 )
 from .worker_pool import IdeaGenerator, WorkerPool
@@ -48,7 +50,7 @@ class SessionManager:
 
         # Stop all active sessions
         for session in self.sessions.values():
-            if hasattr(session, '_worker_pool'):
+            if hasattr(session, '_worker_pool') and session._worker_pool is not None:
                 await session._worker_pool.stop()
 
         logger.info("Session manager stopped")
@@ -67,6 +69,7 @@ class SessionManager:
             client_id=client_id,
             prompt=request.prompt,
             mode=request.mode,
+            client_generated=request.client_generated,
             parameters=request.parameters or GeneticParameters(
                 population_size=request.population_size,
                 generations=request.generations
@@ -75,13 +78,15 @@ class SessionManager:
         )
 
         # Initialize session components
-        session._worker_pool = WorkerPool(self.llm_client, max_workers=20)
-        session._idea_generator = IdeaGenerator(session._worker_pool, self.llm_client)
         session._fitness_evaluator = FitnessEvaluator(session.fitness_weights)
         session._genetic_algorithm = GeneticAlgorithm(session.parameters)
 
-        # Start worker pool
-        await session._worker_pool.start()
+        # Only initialize worker pool if not client-generated
+        if not session.client_generated:
+            session._worker_pool = WorkerPool(self.llm_client, max_workers=20)
+            session._idea_generator = IdeaGenerator(session._worker_pool, self.llm_client)
+            # Start worker pool
+            await session._worker_pool.start()
 
         # Store session
         self.sessions[session_id] = session
@@ -102,8 +107,8 @@ class SessionManager:
         if not session:
             return
 
-        # Stop worker pool
-        if hasattr(session, '_worker_pool'):
+        # Stop worker pool (only if not client-generated)
+        if hasattr(session, '_worker_pool') and session._worker_pool is not None:
             await session._worker_pool.stop()
 
         # Remove from client sessions
@@ -116,19 +121,64 @@ class SessionManager:
         del self.sessions[session_id]
         logger.info(f"Deleted session {session_id}")
 
+    async def inject_ideas(self, session: Session, ideas: list[str], generation: int) -> list[Idea]:
+        """Inject client-generated ideas into a session."""
+        # Validate session state
+        if not session.client_generated:
+            raise ValueError(f"Session {session.id} is not configured for client-generated ideas")
+
+        if session.status != "active":
+            raise ValueError(f"Cannot inject ideas into session with status '{session.status}'")
+
+        injected_ideas = []
+
+        for i, content in enumerate(ideas):
+            idea = Idea(
+                id=str(uuid.uuid4()),
+                content=content,
+                generation=generation,
+                metadata={
+                    "source": "client",
+                    "injection_index": i
+                }
+            )
+            session.ideas.append(idea)
+            injected_ideas.append(idea)
+
+        # Track ideas per generation
+        if generation not in session.ideas_per_generation_received:
+            session.ideas_per_generation_received[generation] = 0
+        session.ideas_per_generation_received[generation] += len(ideas)
+
+        # Update session timestamp
+        session.updated_at = datetime.utcnow()
+
+        logger.info(f"Injected {len(ideas)} ideas into session {session.id} for generation {generation}")
+        return injected_ideas
+
     async def run_generation(self, session: Session, top_k: int = 5) -> GenerationResult:
         """Run the generation process for a session."""
         start_time = datetime.utcnow()
 
         try:
-            # Generate initial population
-            await self._update_progress(session, "Generating initial population...")
+            # Handle initial population
+            if session.client_generated:
+                await self._update_progress(session, "Waiting for initial population from client...")
 
-            initial_ideas = await session._idea_generator.generate_initial_population(
-                session.prompt,
-                session.parameters.population_size
-            )
-            session.ideas.extend(initial_ideas)
+                # Wait for client to inject initial ideas
+                initial_ideas = await self._wait_for_client_ideas(
+                    session,
+                    generation=0,
+                    expected_count=session.parameters.population_size
+                )
+            else:
+                await self._update_progress(session, "Generating initial population...")
+
+                initial_ideas = await session._idea_generator.generate_initial_population(
+                    session.prompt,
+                    session.parameters.population_size
+                )
+                session.ideas.extend(initial_ideas)
 
             # Get embeddings for all ideas and the target prompt
             await self._update_progress(session, "Generating embeddings...")
@@ -160,30 +210,45 @@ class SessionManager:
                         current_population
                     )
 
-                    # Create next generation
-                    new_population = session._genetic_algorithm.create_next_generation(
-                        current_population,
-                        probabilities,
-                        generation
-                    )
+                    if session.client_generated:
+                        # Request ideas from client for next generation
+                        await self._update_progress(
+                            session,
+                            f"Waiting for generation {generation} ideas from client..."
+                        )
 
-                    # Generate content for new ideas using LLM
-                    for idea in new_population:
-                        if not idea.metadata.get("elite", False):
-                            # Generate new content based on parents
-                            parent_contents = [
-                                p.content for p in current_population
-                                if p.id in idea.parent_ids
-                            ]
+                        # Wait for client to inject ideas for this generation
+                        new_population = await self._wait_for_client_ideas(
+                            session,
+                            generation=generation,
+                            expected_count=session.parameters.population_size,
+                            parent_population=current_population
+                        )
+                    else:
+                        # Create next generation
+                        new_population = session._genetic_algorithm.create_next_generation(
+                            current_population,
+                            probabilities,
+                            generation
+                        )
 
-                            generated = await session._idea_generator.generate_from_parents(
-                                parent_contents,
-                                session.prompt,
-                                1
-                            )
+                        # Generate content for new ideas using LLM
+                        for idea in new_population:
+                            if not idea.metadata.get("elite", False):
+                                # Generate new content based on parents
+                                parent_contents = [
+                                    p.content for p in current_population
+                                    if p.id in idea.parent_ids
+                                ]
 
-                            if generated:
-                                idea.content = generated[0].content
+                                generated = await session._idea_generator.generate_from_parents(
+                                    parent_contents,
+                                    session.prompt,
+                                    1
+                                )
+
+                                if generated:
+                                    idea.content = generated[0].content
 
                     # Get embeddings for new ideas
                     for idea in new_population:
@@ -250,6 +315,41 @@ class SessionManager:
         """Update session progress."""
         session.updated_at = datetime.utcnow()
         logger.info(f"Session {session.id}: {message}")
+
+    async def _wait_for_client_ideas(self, session: Session, generation: int,
+                                    expected_count: int, parent_population: list[Idea] | None = None,
+                                    timeout_seconds: int = 300) -> list[Idea]:
+        """Wait for client to inject ideas for a specific generation."""
+        start_time = datetime.utcnow()
+
+        # Get initial count of ideas for this generation
+        initial_count = session.ideas_per_generation_received.get(generation, 0)
+
+        while True:
+            # Check if we have enough ideas for this generation
+            current_count = session.ideas_per_generation_received.get(generation, 0)
+            if current_count - initial_count >= expected_count:
+                # Get the ideas for this generation
+                generation_ideas = [
+                    idea for idea in session.ideas
+                    if idea.generation == generation and idea.metadata.get("source") == "client"
+                ][-expected_count:]  # Get the last expected_count ideas
+
+                # If we have parent population, we might want to set parent_ids
+                # This is handled by the client when creating ideas
+
+                return generation_ideas
+
+            # Check timeout
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+            if elapsed > timeout_seconds:
+                raise TimeoutError(
+                    f"Timeout waiting for client ideas for generation {generation}. "
+                    f"Expected {expected_count}, received {current_count - initial_count}"
+                )
+
+            # Wait a bit before checking again
+            await asyncio.sleep(0.5)
 
     async def _cleanup_loop(self) -> None:
         """Periodically clean up expired sessions."""

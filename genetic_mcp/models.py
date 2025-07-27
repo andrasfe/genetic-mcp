@@ -97,6 +97,8 @@ class Session(BaseModel):
     ideas: list[Idea] = Field(default_factory=list)
     current_generation: int = 0
     status: str = "active"
+    client_generated: bool = False  # Whether client generates ideas instead of LLM workers
+    ideas_per_generation_received: dict[int, int] = Field(default_factory=dict)  # Track ideas received per generation
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -120,6 +122,7 @@ class GenerationRequest(BaseModel):
     parameters: GeneticParameters | None = None
     fitness_weights: FitnessWeights | None = None
     models: list[str] | None = None  # LLM models to use
+    client_generated: bool = Field(default=False)  # Whether client generates ideas instead of LLM workers
 
 
 class GenerationProgress(BaseModel):

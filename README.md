@@ -13,6 +13,86 @@ A Model Context Protocol (MCP) server implementing genetic algorithm-based idea 
 - **Progress Streaming**: Real-time updates for long-running operations
 - **Lineage Tracking**: Complete evolution history and parent-child relationships
 
+## How the Genetic Algorithm Works
+
+This MCP server implements a sophisticated genetic algorithm that evolves ideas through multiple generations, combining the power of LLMs with evolutionary computation principles.
+
+### Core Concepts
+
+1. **Population**: Each generation consists of multiple ideas (default: 10-50)
+2. **Fitness Function**: Multi-objective evaluation scoring each idea
+3. **Evolution**: Ideas improve through selection, crossover, and mutation
+4. **LLM Integration**: Uses language models for intelligent genetic operations
+
+### The Evolution Process
+
+#### Initial Generation (Gen 0)
+- Multiple LLM workers generate diverse initial ideas based on your prompt
+- Each idea is evaluated for fitness across three dimensions:
+  - **Relevance (40%)**: Semantic similarity to the original prompt
+  - **Novelty (30%)**: Uniqueness compared to other ideas
+  - **Feasibility (30%)**: Practical implementability
+
+#### Subsequent Generations (Gen 1+)
+1. **Parent Selection**: Tournament selection picks high-fitness parents
+   - Randomly selects 3 ideas, chooses the best
+   - Repeats to find two parents for breeding
+
+2. **Crossover (70% probability)**: LLM-guided idea combination
+   ```
+   Parent 1: "Decentralized payment verification"
+   Parent 2: "Multi-agent coordination system"
+   Offspring: "Decentralized multi-agent payment network with distributed verification"
+   ```
+
+3. **Mutation (10% probability)**: Intelligent modifications
+   - **Rephrase**: Reword while preserving meaning
+   - **Add**: Introduce new elements
+   - **Remove**: Simplify by removing components
+   - **Modify**: Alter specific aspects
+
+4. **Elitism**: Top 10% of ideas pass unchanged to next generation
+
+### Example Evolution Flow
+
+```
+Prompt: "Innovative payment solutions using agents"
+
+Generation 0: 50 random ideas
+├── "Blockchain payment system" (fitness: 0.6)
+├── "AI agent negotiation" (fitness: 0.7)
+├── "Distributed ledger" (fitness: 0.5)
+└── ... 47 more ideas
+
+Generation 1: Best ideas combine
+├── "Blockchain + AI agents" (fitness: 0.8)
+├── "Distributed agent network" (fitness: 0.75)
+└── ... evolved population
+
+Generation 2-5: Further refinement
+└── Top idea: "Multi-agent payment ecosystem with cryptographic 
+    verification and distributed trust mechanisms" (fitness: 0.95)
+```
+
+### Configuration Parameters
+
+```python
+GeneticParameters(
+    population_size=50,      # Ideas per generation
+    generations=5,           # Evolution cycles
+    mutation_rate=0.1,       # 10% mutation chance
+    crossover_rate=0.7,      # 70% crossover chance
+    elitism_count=2          # Preserve top 2 ideas
+)
+```
+
+### Why It Works
+
+1. **Exploration vs Exploitation**: Mutations explore new possibilities while crossover exploits successful patterns
+2. **Parallel Diversity**: Multiple workers ensure diverse idea generation
+3. **Intelligent Operations**: LLMs understand context, creating meaningful combinations
+4. **Multi-objective Optimization**: Balances multiple criteria for well-rounded solutions
+
 ## Architecture
 
 Built by a team of collaborative AI agents:
@@ -130,65 +210,120 @@ ANTHROPIC_MODEL=claude-3-opus-20240229             # Default model for Anthropic
 ## MCP Tools
 
 ### 1. create_session
-Create a new genetic algorithm session with configuration:
+Create a new genetic algorithm session:
 ```json
 {
-  "population_size": 50,
-  "max_generations": 20,
+  "prompt": "innovative solutions for urban transportation",
+  "mode": "iterative",  // "single_pass" or "iterative"
+  "population_size": 10,
+  "top_k": 5,
+  "generations": 5,
   "fitness_weights": {
     "relevance": 0.4,
     "novelty": 0.3,
     "feasibility": 0.3
-  }
+  },
+  "models": ["openrouter", "anthropic"],  // Optional
+  "client_generated": false  // Set to true for client-generated mode
 }
 ```
 
-### 2. generate
-Generate initial population of ideas:
+### 2. run_generation
+Run the generation process for a session:
 ```json
 {
   "session_id": "session-uuid",
-  "prompt": "innovative solutions for urban transportation",
-  "count": 20
+  "top_k": 5
 }
 ```
 
-### 3. evolve
-Evolve population through genetic operations:
+### 3. inject_ideas (Client-Generated Mode)
+Inject client-generated ideas into a session:
 ```json
 {
   "session_id": "session-uuid",
-  "generations": 10
+  "ideas": [
+    "First innovative idea",
+    "Second creative solution",
+    "Third unique approach"
+  ],
+  "generation": 0  // Generation number
 }
 ```
 
-### 4. get_results
-Retrieve top-K ideas with scores and lineage:
+### 4. get_progress
+Get progress information for a running session:
+```json
+{
+  "session_id": "session-uuid"
+}
+```
+
+### 5. get_session
+Get detailed session information:
 ```json
 {
   "session_id": "session-uuid",
-  "top_k": 5,
-  "include_lineage": true
+  "include_ideas": true,
+  "ideas_limit": 100,
+  "generation_filter": 2  // Optional: filter by generation
 }
 ```
 
-### 5. list_sessions
-List all active sessions:
+### 6. set_fitness_weights
+Update fitness weights for a session:
 ```json
-{}
+{
+  "session_id": "session-uuid",
+  "relevance": 0.5,
+  "novelty": 0.3,
+  "feasibility": 0.2
+}
 ```
 
 ## Usage Example
 
+### Standard Mode (LLM-Generated Ideas)
 1. Create a session with desired configuration
-2. Generate initial population with your prompt
-3. Evolve for multiple generations
-4. Retrieve top results with fitness scores
+2. Call `run_generation` to start the genetic algorithm
+3. Monitor progress with `get_progress`
+4. Retrieve results with `get_session`
+
+### Client-Generated Mode
+1. Create a session with `client_generated: true`
+2. Start `run_generation` in the background
+3. Inject ideas for each generation using `inject_ideas`
+4. The algorithm will evaluate and evolve based on your ideas
+5. Retrieve results showing the best ideas and their fitness scores
+
+Example workflow:
+```python
+# Create client-generated session
+session = create_session(
+    prompt="sustainable urban farming",
+    mode="iterative",
+    population_size=5,
+    generations=3,
+    client_generated=True
+)
+
+# Start generation (runs async)
+generation_task = run_generation(session_id)
+
+# Inject ideas for each generation
+inject_ideas(session_id, ideas=["idea1", "idea2", ...], generation=0)
+# Wait for evaluation...
+inject_ideas(session_id, ideas=["evolved1", "evolved2", ...], generation=1)
+# Continue for all generations...
+
+# Get results
+results = await generation_task
+```
 
 ## Testing
 
 ```bash
-# Run all tests (35 tests pass)
+# Run all tests (42 tests pass)
 pytest tests/ -v
 
 # Check test coverage

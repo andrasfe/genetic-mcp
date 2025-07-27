@@ -6,12 +6,9 @@ import os
 import sys
 from typing import Any
 
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
-
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
 
 from .llm_client import (
     AnthropicClient,
@@ -23,7 +20,12 @@ from .models import (
     FitnessWeights,
     GenerationRequest,
 )
+from .optimization_config import OptimizationConfig
 from .session_manager import SessionManager
+from .session_manager_optimized import OptimizedSessionManager
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -55,6 +57,14 @@ class CreateSessionSchema(BaseModel):
         default=None,
         description="List of LLM models to use (e.g., ['openai:gpt-4', 'anthropic:claude-3'])"
     )
+    client_generated: bool = Field(
+        default=False,
+        description="Whether the client generates ideas instead of using LLM workers"
+    )
+    optimization_level: str | None = Field(
+        default=None,
+        description="Optimization level: 'basic', 'enhanced', 'gpu', or 'full'. If not specified, uses server default."
+    )
 
 
 class RunGenerationSchema(BaseModel):
@@ -79,6 +89,23 @@ class SetFitnessWeightsSchema(BaseModel):
     relevance: float = Field(ge=0, le=1, description="Weight for relevance score")
     novelty: float = Field(ge=0, le=1, description="Weight for novelty score")
     feasibility: float = Field(ge=0, le=1, description="Weight for feasibility score")
+
+
+class InjectIdeasSchema(BaseModel):
+    """Schema for inject_ideas tool."""
+    session_id: str = Field(description="The session ID to inject ideas into")
+    ideas: list[str] = Field(description="List of idea contents to inject")
+    generation: int = Field(default=0, ge=0, description="Generation number for these ideas")
+
+
+class GetOptimizationStatsSchema(BaseModel):
+    """Schema for get_optimization_stats tool."""
+    pass  # No parameters needed
+
+
+class GetOptimizationReportSchema(BaseModel):
+    """Schema for get_optimization_report tool."""
+    session_id: str = Field(description="The session ID to get optimization report for")
 
 
 # Global session manager
@@ -134,7 +161,9 @@ async def create_session(
     top_k: int = 5,
     generations: int = 5,
     fitness_weights: dict[str, float] | None = None,
-    models: list[str] | None = None
+    models: list[str] | None = None,
+    client_generated: bool = False,
+    optimization_level: str | None = None
 ) -> dict[str, Any]:
     """Create a new idea generation session.
 
@@ -146,6 +175,7 @@ async def create_session(
         generations: Number of generations (for iterative mode)
         fitness_weights: Weights for fitness calculation (relevance, novelty, feasibility)
         models: List of LLM models to use
+        client_generated: Whether the client generates ideas instead of using LLM workers
 
     Returns:
         Session information including session_id
@@ -166,17 +196,31 @@ async def create_session(
             top_k=top_k,
             generations=generations,
             fitness_weights=weights,
-            models=models
+            models=models,
+            client_generated=client_generated
         )
 
         # Create session
         client_id = "default"  # In real implementation, extract from context
-        session = await session_manager.create_session(client_id, request)
+
+        # Handle optimization if supported
+        if hasattr(session_manager, 'create_session') and callable(getattr(session_manager.create_session, '__func__', None)):
+            # Check if this is an OptimizedSessionManager
+            if optimization_level and hasattr(session_manager, 'optimization_config'):
+                # Create session-specific optimization config
+                from .optimization_config import OptimizationConfig
+                session_config = OptimizationConfig(level=optimization_level)
+                session = await session_manager.create_session(client_id, request, optimization_override=session_config)
+            else:
+                session = await session_manager.create_session(client_id, request)
+        else:
+            session = await session_manager.create_session(client_id, request)
 
         return {
             "session_id": session.id,
             "status": session.status,
             "mode": session.mode,
+            "client_generated": session.client_generated,
             "parameters": {
                 "population_size": session.parameters.population_size,
                 "generations": session.parameters.generations,
@@ -279,14 +323,24 @@ async def get_progress(session_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_session(session_id: str) -> dict[str, Any]:
-    """Get detailed information about a session.
+async def get_session(
+    session_id: str,
+    include_ideas: bool = True,
+    ideas_limit: int | None = 100,
+    ideas_offset: int = 0,
+    generation_filter: int | None = None
+) -> dict[str, Any]:
+    """Get detailed information about a session with pagination support.
 
     Args:
         session_id: The session ID to retrieve
+        include_ideas: Whether to include ideas in the response (default: True)
+        ideas_limit: Maximum number of ideas to return (default: 100, max: 1000)
+        ideas_offset: Offset for pagination (default: 0)
+        generation_filter: Only return ideas from a specific generation (optional)
 
     Returns:
-        Detailed session information including all ideas
+        Detailed session information with paginated ideas
     """
     global session_manager
 
@@ -295,12 +349,18 @@ async def get_session(session_id: str) -> dict[str, Any]:
         if not session:
             raise ValueError(f"Session {session_id} not found")
 
-        return {
+        # Validate and set limits
+        if ideas_limit is None:
+            ideas_limit = 100
+        ideas_limit = min(ideas_limit, 1000)  # Cap at 1000 ideas
+
+        result = {
             "session_id": session.id,
             "client_id": session.client_id,
             "prompt": session.prompt,
             "mode": session.mode,
             "status": session.status,
+            "client_generated": session.client_generated,
             "current_generation": session.current_generation,
             "parameters": {
                 "population_size": session.parameters.population_size,
@@ -314,7 +374,23 @@ async def get_session(session_id: str) -> dict[str, Any]:
                 "novelty": session.fitness_weights.novelty,
                 "feasibility": session.fitness_weights.feasibility
             },
-            "ideas": [
+            "total_ideas": len(session.ideas),
+            "ideas_per_generation": session.ideas_per_generation_received if session.client_generated else {},
+            "worker_stats": session._worker_pool.get_worker_stats() if hasattr(session, '_worker_pool') and not session.client_generated else {}
+        }
+
+        # Add ideas with pagination if requested
+        if include_ideas:
+            # Filter by generation if specified
+            ideas = session.ideas
+            if generation_filter is not None:
+                ideas = [idea for idea in ideas if idea.generation == generation_filter]
+
+            # Apply pagination
+            total_filtered = len(ideas)
+            ideas_page = ideas[ideas_offset:ideas_offset + ideas_limit]
+
+            result["ideas"] = [
                 {
                     "id": idea.id,
                     "content": idea.content,
@@ -323,10 +399,15 @@ async def get_session(session_id: str) -> dict[str, Any]:
                     "scores": idea.scores,
                     "parent_ids": idea.parent_ids
                 }
-                for idea in session.ideas
-            ],
-            "worker_stats": session._worker_pool.get_worker_stats() if hasattr(session, '_worker_pool') else {}
-        }
+                for idea in ideas_page
+            ]
+            result["ideas_returned"] = len(ideas_page)
+            result["ideas_total_filtered"] = total_filtered
+            result["ideas_offset"] = ideas_offset
+            result["ideas_limit"] = ideas_limit
+            result["has_more_ideas"] = (ideas_offset + ideas_limit) < total_filtered
+
+        return result
 
     except Exception as e:
         logger.error(f"Error getting session: {e}")
@@ -376,6 +457,114 @@ async def set_fitness_weights(
         raise
 
 
+@mcp.tool()
+async def get_optimization_stats() -> dict[str, Any]:
+    """Get optimization statistics and capabilities.
+
+    Returns:
+        Dictionary containing optimization capabilities and current usage statistics
+    """
+    global session_manager
+
+    try:
+        # Check if using optimized session manager
+        if hasattr(session_manager, 'get_global_stats'):
+            stats = session_manager.get_global_stats()
+        else:
+            stats = {
+                "optimization_enabled": False,
+                "message": "Standard session manager in use. Set GENETIC_MCP_OPTIMIZATION_ENABLED=true to enable optimizations."
+            }
+
+        # Add server configuration info
+        stats["configuration"] = {
+            "optimization_enabled": os.getenv("GENETIC_MCP_OPTIMIZATION_ENABLED", "false").lower() == "true",
+            "optimization_level": os.getenv("GENETIC_MCP_OPTIMIZATION_LEVEL", "basic"),
+            "gpu_requested": os.getenv("GENETIC_MCP_USE_GPU", "false").lower() == "true"
+        }
+
+        return stats
+
+    except Exception as e:
+        logger.error(f"Error getting optimization stats: {e}")
+        raise
+
+
+@mcp.tool()
+async def get_optimization_report(session_id: str) -> dict[str, Any]:
+    """Get detailed optimization report for a specific session.
+
+    Args:
+        session_id: The session ID to get report for
+
+    Returns:
+        Detailed optimization report including metrics, configuration, and recommendations
+    """
+    global session_manager
+
+    try:
+        # Check if using optimized session manager
+        if hasattr(session_manager, 'get_optimization_report'):
+            report = await session_manager.get_optimization_report(session_id)
+            return report
+        else:
+            return {
+                "session_id": session_id,
+                "optimization_enabled": False,
+                "message": "Optimization reports are only available when using the optimized session manager."
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting optimization report: {e}")
+        raise
+
+
+@mcp.tool()
+async def inject_ideas(
+    session_id: str,
+    ideas: list[str],
+    generation: int = 0
+) -> dict[str, Any]:
+    """Inject client-generated ideas into a session.
+
+    Args:
+        session_id: The session ID to inject ideas into
+        ideas: List of idea contents to inject
+        generation: Generation number for these ideas (default: 0)
+
+    Returns:
+        Information about injected ideas
+    """
+    global session_manager
+
+    try:
+        session = await session_manager.get_session(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        if not session.client_generated:
+            raise ValueError(f"Session {session_id} is not configured for client-generated ideas")
+
+        if session.status != "active":
+            raise ValueError(f"Session {session_id} is not active (status: {session.status})")
+
+        # Inject ideas into the session
+        injected_ideas = await session_manager.inject_ideas(session, ideas, generation)
+
+        return {
+            "session_id": session_id,
+            "injected_count": len(injected_ideas),
+            "generation": generation,
+            "total_ideas": len(session.ideas),
+            "ideas_per_generation": session.ideas_per_generation_received,
+            "message": f"Successfully injected {len(injected_ideas)} ideas into generation {generation}"
+        }
+
+    except Exception as e:
+        logger.error(f"Error injecting ideas: {e}")
+        raise
+
+
 async def initialize_server():
     """Initialize the server components."""
     global session_manager
@@ -383,11 +572,25 @@ async def initialize_server():
     # Initialize LLM client
     llm_client = initialize_llm_client()
 
-    # Initialize session manager
-    session_manager = SessionManager(llm_client)
-    await session_manager.start()
+    # Check if optimizations are requested
+    optimization_enabled = os.getenv("GENETIC_MCP_OPTIMIZATION_ENABLED", "false").lower() == "true"
 
-    logger.info("Genetic MCP server initialized")
+    if optimization_enabled:
+        # Create optimization config from environment
+        optimization_config = OptimizationConfig.from_env()
+
+        # Initialize optimized session manager
+        session_manager = OptimizedSessionManager(
+            llm_client=llm_client,
+            optimization_config=optimization_config
+        )
+        logger.info(f"Genetic MCP server initialized with optimization level: {optimization_config.level}")
+    else:
+        # Initialize standard session manager
+        session_manager = SessionManager(llm_client)
+        logger.info("Genetic MCP server initialized (standard mode)")
+
+    await session_manager.start()
 
 
 async def shutdown_server():
@@ -414,8 +617,7 @@ def main():
 
         # Set up shutdown handler
         import atexit
-        import signal
-        
+
         def sync_shutdown():
             try:
                 loop = asyncio.new_event_loop()
@@ -424,7 +626,7 @@ def main():
                 loop.close()
             except Exception:
                 pass  # Ignore errors during shutdown
-        
+
         atexit.register(sync_shutdown)
 
         # Run in stdio mode - FastMCP handles the async context
