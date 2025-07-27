@@ -100,7 +100,10 @@ class AnthropicClient(LLMClient):
     async def embed(self, text: str) -> list[float]:
         """Generate embeddings (using OpenAI as fallback)."""
         if not self._openai_client:
-            raise ValueError("No embedding provider available. Set OpenAI API key for embeddings.")
+            raise ValueError(
+                "OpenAI API key is required for embeddings. "
+                "Please set OPENAI_API_KEY in your environment or .env file."
+            )
 
         try:
             response = await self._openai_client.embeddings.create(
@@ -154,9 +157,10 @@ class OpenRouterClient(LLMClient):
     async def embed(self, text: str) -> list[float]:
         """Generate embeddings (using OpenAI as fallback)."""
         if not self._openai_client:
-            # Return dummy embedding for testing
-            logger.warning("No embedding provider available, using dummy embeddings")
-            return [0.0] * 1536  # OpenAI embedding dimension
+            raise ValueError(
+                "OpenAI API key is required for embeddings. "
+                "Please set OPENAI_API_KEY in your environment or .env file."
+            )
 
         try:
             response = await self._openai_client.embeddings.create(
@@ -166,8 +170,7 @@ class OpenRouterClient(LLMClient):
             return response.data[0].embedding
         except Exception as e:
             logger.error(f"Embedding error: {e}")
-            # Return dummy embedding on error
-            return [0.0] * 1536
+            raise
 
 
 class LLMClientFactory:

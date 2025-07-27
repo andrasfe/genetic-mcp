@@ -1,7 +1,7 @@
 """Session management for genetic MCP server."""
 
 import asyncio
-import logging
+import time
 import uuid
 from asyncio import TimeoutError
 from datetime import datetime, timedelta
@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from .fitness import FitnessEvaluator
 from .genetic_algorithm import GeneticAlgorithm
 from .llm_client import MultiModelClient
+from .logging_config import log_error, log_operation, log_performance, setup_logging
 from .models import (
     EvolutionMode,
     FitnessWeights,
@@ -21,7 +22,7 @@ from .models import (
 )
 from .worker_pool import IdeaGenerator, WorkerPool
 
-logger = logging.getLogger(__name__)
+logger = setup_logging(component="session_manager")
 
 
 class SessionManager:
@@ -57,6 +58,14 @@ class SessionManager:
 
     async def create_session(self, client_id: str, request: GenerationRequest) -> Session:
         """Create a new generation session."""
+        start_time = time.time()
+
+        log_operation(logger, "CREATE_SESSION",
+                      client_id=client_id,
+                      mode=request.mode,
+                      population_size=request.population_size,
+                      client_generated=request.client_generated)
+
         # Check client session limit
         client_sessions = self.client_sessions.get(client_id, [])
         if len(client_sessions) >= self.max_sessions_per_client:
@@ -94,7 +103,11 @@ class SessionManager:
             self.client_sessions[client_id] = []
         self.client_sessions[client_id].append(session_id)
 
-        logger.info(f"Created session {session_id} for client {client_id}")
+        log_performance(logger, "CREATE_SESSION", time.time() - start_time,
+                       session_id=session_id,
+                       client_id=client_id,
+                       mode=request.mode)
+
         return session
 
     async def get_session(self, session_id: str) -> Session | None:
@@ -103,8 +116,11 @@ class SessionManager:
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
+        log_operation(logger, "DELETE_SESSION", session_id=session_id)
+
         session = self.sessions.get(session_id)
         if not session:
+            logger.warning(f"Attempted to delete non-existent session {session_id}")
             return
 
         # Stop worker pool (only if not client-generated)
@@ -119,10 +135,15 @@ class SessionManager:
 
         # Remove session
         del self.sessions[session_id]
-        logger.info(f"Deleted session {session_id}")
+        logger.info(f"Successfully deleted session {session_id}")
 
     async def inject_ideas(self, session: Session, ideas: list[str], generation: int) -> list[Idea]:
         """Inject client-generated ideas into a session."""
+        log_operation(logger, "INJECT_IDEAS",
+                      session_id=session.id,
+                      idea_count=len(ideas),
+                      generation=generation)
+
         # Validate session state
         if not session.client_generated:
             raise ValueError(f"Session {session.id} is not configured for client-generated ideas")
@@ -159,6 +180,14 @@ class SessionManager:
     async def run_generation(self, session: Session, top_k: int = 5) -> GenerationResult:
         """Run the generation process for a session."""
         start_time = datetime.utcnow()
+        perf_start = time.time()
+
+        log_operation(logger, "RUN_GENERATION",
+                      session_id=session.id,
+                      mode=session.mode,
+                      population_size=session.parameters.population_size,
+                      generations=session.parameters.generations,
+                      top_k=top_k)
 
         try:
             # Handle initial population
@@ -286,11 +315,19 @@ class SessionManager:
             )
 
             session.status = "completed"
+
+            log_performance(logger, "RUN_GENERATION", time.time() - perf_start,
+                           session_id=session.id,
+                           total_ideas=result.total_ideas_generated,
+                           generations=result.generations_completed,
+                           execution_time=execution_time,
+                           status="completed")
+
             return result
 
         except Exception as e:
             session.status = "failed"
-            logger.error(f"Generation failed for session {session.id}: {e}")
+            log_error(logger, "RUN_GENERATION", e, session_id=session.id)
             raise
 
     async def get_progress(self, session_id: str) -> GenerationProgress | None:

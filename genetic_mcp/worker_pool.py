@@ -1,14 +1,15 @@
 """Worker pool management for parallel LLM processing."""
 
 import asyncio
-import logging
+import time
 import uuid
 from typing import Any
 
 from .llm_client import MultiModelClient
+from .logging_config import log_error, log_operation, log_performance, setup_logging
 from .models import Idea, Worker, WorkerStatus
 
-logger = logging.getLogger(__name__)
+logger = setup_logging(component="worker_pool")
 
 
 class WorkerPool:
@@ -28,6 +29,8 @@ class WorkerPool:
         if self._running:
             return
 
+        log_operation(logger, "START_WORKER_POOL", max_workers=self.max_workers)
+
         self._running = True
         available_models = self.llm_client.get_available_models()
 
@@ -45,7 +48,7 @@ class WorkerPool:
             task = asyncio.create_task(self._worker_loop(worker))
             self._worker_tasks.append(task)
 
-        logger.info(f"Started worker pool with {self.max_workers} workers")
+        logger.info(f"Started worker pool with {self.max_workers} workers across {len(available_models)} models")
 
     async def stop(self) -> None:
         """Stop the worker pool."""
@@ -97,6 +100,9 @@ class WorkerPool:
                 worker.status = WorkerStatus.WORKING
                 worker.current_task = task["id"]
 
+                logger.debug(f"Worker {worker.id} ({worker.model}) processing task {task['id']}")
+                start_time = time.time()
+
                 # Generate idea
                 try:
                     content = await self.llm_client.generate(
@@ -128,8 +134,18 @@ class WorkerPool:
 
                     worker.completed_tasks += 1
 
+                    log_performance(logger, "WORKER_TASK", time.time() - start_time,
+                                   worker_id=worker.id,
+                                   model=worker.model,
+                                   task_id=task["id"],
+                                   status="success")
+
                 except Exception as e:
-                    logger.error(f"Worker {worker.id} error: {e}")
+                    log_error(logger, "WORKER_TASK", e,
+                             worker_id=worker.id,
+                             model=worker.model,
+                             task_id=task["id"])
+
                     await self.result_queue.put({
                         "task_id": task["id"],
                         "error": str(e),
@@ -184,6 +200,11 @@ class IdeaGenerator:
     async def generate_initial_population(self, prompt: str, size: int,
                                         system_prompt: str | None = None) -> list[Idea]:
         """Generate initial population of ideas."""
+        start_time = time.time()
+        log_operation(logger, "GENERATE_INITIAL_POPULATION",
+                      prompt=prompt[:50] + "..." if len(prompt) > 50 else prompt,
+                      size=size)
+
         # Submit all tasks
         task_ids = []
         for i in range(size):
@@ -214,6 +235,11 @@ class IdeaGenerator:
 
         if len(ideas) < size:
             logger.warning(f"Only generated {len(ideas)} out of {size} requested ideas")
+
+        log_performance(logger, "GENERATE_INITIAL_POPULATION", time.time() - start_time,
+                       requested=size,
+                       generated=len(ideas),
+                       status="completed")
 
         return ideas
 

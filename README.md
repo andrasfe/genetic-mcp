@@ -12,6 +12,9 @@ A Model Context Protocol (MCP) server implementing genetic algorithm-based idea 
 - **Multi-Model Support**: OpenAI, Anthropic, and OpenRouter LLM integrations
 - **Progress Streaming**: Real-time updates for long-running operations
 - **Lineage Tracking**: Complete evolution history and parent-child relationships
+- **Advanced Optimization**: Adaptive parameters, Pareto optimization, species preservation
+- **Client-Generated Mode**: Support for human-in-the-loop idea generation
+- **Claude Evaluation Mode**: Combine algorithmic fitness with Claude's qualitative assessment
 
 ## How the Genetic Algorithm Works
 
@@ -78,11 +81,11 @@ Generation 2-5: Further refinement
 
 ```python
 GeneticParameters(
-    population_size=50,      # Ideas per generation
+    population_size=10,      # Ideas per generation (default: 10)
     generations=5,           # Evolution cycles
     mutation_rate=0.1,       # 10% mutation chance
     crossover_rate=0.7,      # 70% crossover chance
-    elitism_count=2          # Preserve top 2 ideas
+    elitism_rate=0.1         # Preserve top 10% of ideas
 )
 ```
 
@@ -92,6 +95,64 @@ GeneticParameters(
 2. **Parallel Diversity**: Multiple workers ensure diverse idea generation
 3. **Intelligent Operations**: LLMs understand context, creating meaningful combinations
 4. **Multi-objective Optimization**: Balances multiple criteria for well-rounded solutions
+
+## Claude Evaluation Mode
+
+The Claude evaluation mode enhances the genetic algorithm by combining algorithmic fitness scores with Claude's qualitative assessment. This creates a more nuanced selection process that considers both quantitative metrics and human-like judgment.
+
+### How It Works
+
+1. **Enable Evaluation**: Call `enable_claude_evaluation` with desired weight (0-1)
+2. **Request Evaluation**: Use `evaluate_ideas` to get unevaluated ideas
+3. **Submit Assessments**: Claude evaluates ideas and submits scores via `submit_evaluations`
+4. **Combined Fitness**: System combines algorithmic and Claude scores based on weight
+
+### Benefits
+
+- **Qualitative Insights**: Captures nuances that algorithms might miss
+- **Context Understanding**: Claude can assess real-world feasibility and impact
+- **Flexible Weighting**: Adjust balance between algorithmic and qualitative evaluation
+- **Backwards Compatible**: Works seamlessly with existing sessions
+
+### Example Workflow
+
+```python
+# 1. Create session normally
+session = await mcp.create_session(prompt="Urban transportation solutions")
+
+# 2. Enable Claude evaluation (40% weight)
+await mcp.enable_claude_evaluation(session_id, evaluation_weight=0.4)
+
+# 3. Run generation
+await mcp.run_generation(session_id)
+
+# 4. Get ideas for evaluation
+eval_request = await mcp.evaluate_ideas(session_id, batch_size=10)
+
+# 5. Claude evaluates each idea
+evaluations = {}
+for idea in eval_request['ideas']:
+    evaluations[idea['id']] = {
+        "score": 0.85,  # 0-1 score
+        "justification": "Innovative approach with clear benefits",
+        "strengths": ["Scalable", "User-friendly"],
+        "weaknesses": ["High initial cost"]
+    }
+
+# 6. Submit evaluations
+await mcp.submit_evaluations(session_id, evaluations)
+
+# 7. Continue evolution with enhanced fitness
+await mcp.run_generation(session_id)  # Uses combined fitness for selection
+```
+
+### Evaluation Criteria
+
+Claude evaluates ideas based on:
+- **Relevance**: How well it addresses the original prompt
+- **Novelty**: Creative and unique aspects
+- **Feasibility**: Practical implementation considerations
+- **Potential Impact**: Expected value if implemented
 
 ## Architecture
 
@@ -109,6 +170,7 @@ Built by a team of collaborative AI agents:
 ```bash
 claude mcp add genetic-mcp \
   -e OPENROUTER_API_KEY="your-api-key-here" \
+  -e OPENAI_API_KEY="your-oai-api-key-here" \
   -- uvx --from git+https://github.com/YOUR_USERNAME/genetic-mcp.git genetic-mcp
 ```
 
@@ -176,10 +238,12 @@ Then configure Claude Desktop to use the local command:
 
 Create a `.env` file in the project root:
 ```bash
-# Required: At least one API key
-OPENROUTER_API_KEY=your-openrouter-api-key
-OPENAI_API_KEY=your-openai-api-key        # Optional
-ANTHROPIC_API_KEY=your-anthropic-api-key  # Optional
+# Required API keys
+OPENAI_API_KEY=your-openai-api-key        # Required for embeddings
+OPENROUTER_API_KEY=your-openrouter-api-key # Required for LLM generation
+
+# Optional API key
+ANTHROPIC_API_KEY=your-anthropic-api-key  # Optional alternative LLM
 
 # LLM Model Configuration
 OPENROUTER_MODEL=meta-llama/llama-3.2-3b-instruct  # Default model for OpenRouter
@@ -190,9 +254,9 @@ ANTHROPIC_MODEL=claude-3-opus-20240229             # Default model for Anthropic
 ### Environment Variables
 
 #### API Configuration
-- `OPENROUTER_API_KEY`: OpenRouter API key (supports multiple models)
-- `OPENAI_API_KEY`: OpenAI API key (optional)
-- `ANTHROPIC_API_KEY`: Anthropic API key (optional)
+- `OPENAI_API_KEY`: OpenAI API key (required for embeddings)
+- `OPENROUTER_API_KEY`: OpenRouter API key (required for LLM generation)
+- `ANTHROPIC_API_KEY`: Anthropic API key (optional alternative LLM)
 
 #### Model Selection
 - `OPENROUTER_MODEL`: Model to use with OpenRouter (default: `meta-llama/llama-3.2-3b-instruct`)
@@ -206,6 +270,10 @@ ANTHROPIC_MODEL=claude-3-opus-20240229             # Default model for Anthropic
 - `GENETIC_MCP_GPU`: Enable GPU acceleration (`true`/`false`)
 - `WORKER_POOL_SIZE`: Number of parallel LLM workers (default: 5)
 - `SESSION_TTL_SECONDS`: Session timeout in seconds (default: 3600)
+
+#### Logging Configuration
+- `GENETIC_MCP_LOG_LEVEL`: Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`)
+- `GENETIC_MCP_LOG_FILE`: Optional log file path for persistent logging
 
 ## MCP Tools
 
@@ -224,7 +292,8 @@ Create a new genetic algorithm session:
     "feasibility": 0.3
   },
   "models": ["openrouter", "anthropic"],  // Optional
-  "client_generated": false  // Set to true for client-generated mode
+  "client_generated": false,  // Set to true for client-generated mode
+  "optimization_level": "standard"  // Optional: "basic", "standard", "advanced"
 }
 ```
 
@@ -266,6 +335,7 @@ Get detailed session information:
   "session_id": "session-uuid",
   "include_ideas": true,
   "ideas_limit": 100,
+  "ideas_offset": 0,  // For pagination
   "generation_filter": 2  // Optional: filter by generation
 }
 ```
@@ -278,6 +348,55 @@ Update fitness weights for a session:
   "relevance": 0.5,
   "novelty": 0.3,
   "feasibility": 0.2
+}
+```
+
+### 7. get_optimization_stats
+Get optimization capabilities and usage statistics:
+```json
+{}  // No parameters required
+```
+
+### 8. evaluate_ideas (Claude Evaluation Mode)
+Request Claude to evaluate ideas in a session:
+```json
+{
+  "session_id": "session-uuid",
+  "idea_ids": ["idea-1", "idea-2"],  // Optional: specific ideas to evaluate
+  "evaluation_batch_size": 10  // Number of ideas per batch
+}
+```
+
+### 9. submit_evaluations (Claude Evaluation Mode)
+Submit Claude's evaluations for ideas:
+```json
+{
+  "session_id": "session-uuid",
+  "evaluations": {
+    "idea-1": {
+      "score": 0.85,
+      "justification": "Highly innovative and practical",
+      "strengths": ["Scalable", "Cost-effective"],
+      "weaknesses": ["Complex implementation"]
+    }
+  }
+}
+```
+
+### 10. enable_claude_evaluation
+Enable Claude evaluation mode for enhanced fitness calculation:
+```json
+{
+  "session_id": "session-uuid",
+  "evaluation_weight": 0.5  // Weight for Claude's evaluation (0-1)
+}
+```
+
+### 11. get_optimization_report
+Get detailed optimization report for a session:
+```json
+{
+  "session_id": "session-uuid"
 }
 ```
 
@@ -323,30 +442,119 @@ results = await generation_task
 ## Testing
 
 ```bash
-# Run all tests (42 tests pass)
+# Run all tests (42 tests currently passing)
 pytest tests/ -v
+
+# Run unit tests only
+pytest tests/unit/ -v
+
+# Run integration tests only  
+pytest tests/integration/ -v
 
 # Check test coverage
 pytest tests/ --cov=genetic_mcp
 
-# Run linting
-ruff check genetic_mcp/
-ruff format genetic_mcp/
+# Run linting and type checking
+make lint
+
+# Auto-fix linting issues
+make lint-fix
+
+# Format code
+make format
 ```
 
 ## Project Structure
 
 ```
 genetic_mcp/
-├── models.py           # Pydantic data models (v2)
-├── server.py           # FastMCP server implementation
-├── session_manager.py  # Session lifecycle management
-├── worker_pool.py      # Async LLM worker orchestration
-├── genetic_algorithm.py # GA operations
-├── fitness_evaluator.py # Multi-objective fitness
-├── llm_client.py       # Multi-model LLM support
-├── gpu_*.py            # GPU acceleration modules
-└── tests/              # Comprehensive test suite
+├── models.py                    # Pydantic data models (v2)
+├── server.py                    # FastMCP server implementation
+├── session_manager.py           # Session lifecycle management
+├── worker_pool.py               # Async LLM worker orchestration
+├── genetic_algorithm.py         # Core GA operations
+├── genetic_algorithm_optimized.py # Enhanced GA with adaptive strategies
+├── fitness.py                   # Multi-objective fitness evaluation
+├── fitness_enhanced.py          # Advanced fitness with Pareto optimization
+├── llm_client.py                # Multi-model LLM support
+├── diversity_manager.py         # Species preservation and diversity
+├── optimization_coordinator.py  # Advanced GA orchestration
+├── gpu_*.py                     # GPU acceleration modules
+└── tests/                       # Comprehensive test suite
+```
+
+## Logging
+
+The server includes comprehensive logging to track operations at every step.
+
+### Default Log Output
+
+By default, logs are written to **stderr** (standard error stream):
+- **Direct execution**: Logs appear in your terminal
+- **Claude Desktop**: Logs are captured by MCP but not shown in the UI
+- **No file output** unless explicitly configured
+
+### Log Levels
+- **DEBUG**: Detailed information for debugging (worker tasks, fitness calculations)
+- **INFO**: General operational information (session creation, generation progress) - **Default level**
+- **WARNING**: Warning messages (failed tasks, missing embeddings)
+- **ERROR**: Error messages with full context
+- **CRITICAL**: Critical failures
+
+### Structured Logging
+Each component logs with structured context:
+- **MCP Tool Calls**: All tool invocations with parameters and execution time
+- **Session Lifecycle**: Creation, deletion, and state transitions
+- **Worker Pool**: Task distribution, success/failure rates, performance metrics
+- **Genetic Algorithm**: Generation creation, selection methods, crossover/mutation operations
+- **Fitness Evaluation**: Population statistics, individual fitness scores
+
+### Configuring Logging
+
+#### For Testing/Development
+```bash
+# Run with debug logging in terminal
+GENETIC_MCP_LOG_LEVEL=DEBUG genetic-mcp
+
+# Save logs to file
+GENETIC_MCP_LOG_FILE=./genetic_mcp.log genetic-mcp
+```
+
+#### For Claude Desktop
+Add to `~/.claude/claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "genetic-mcp": {
+      "command": "genetic-mcp",
+      "env": {
+        "GENETIC_MCP_LOG_LEVEL": "INFO",
+        "GENETIC_MCP_LOG_FILE": "~/.genetic_mcp/server.log"
+      }
+    }
+  }
+}
+```
+
+Then view logs with:
+```bash
+tail -f ~/.genetic_mcp/server.log
+```
+
+#### Finding Claude Desktop Logs
+When file logging is not configured, check Claude's internal logs:
+- **macOS**: `~/Library/Logs/Claude/`
+- **Windows**: `%APPDATA%\Claude\logs\`
+- **Linux**: `~/.config/Claude/logs/`
+
+### Log Output Examples
+```
+15:23:45 - genetic_mcp.server - INFO - [CREATE_SESSION] client_id=default mode=iterative population_size=10 client_generated=False
+15:23:45 - genetic_mcp.server - INFO - [CREATE_SESSION] duration=0.023s session_id=abc123 client_id=default mode=iterative
+15:23:46 - genetic_mcp.session_manager - INFO - Starting generation for session abc123, mode=iterative, population_size=10, generations=5
+15:23:47 - genetic_mcp.worker_pool - DEBUG - Worker w1 (openai) processing task t1
+15:23:48 - genetic_mcp.worker_pool - INFO - [WORKER_TASK] duration=1.234s worker_id=w1 model=openai task_id=t1 status=success
+15:23:52 - genetic_mcp.fitness - INFO - [EVALUATE_POPULATION] duration=0.567s population_size=10 avg_fitness=0.75 max_fitness=0.92
 ```
 
 ## Troubleshooting
@@ -375,6 +583,12 @@ genetic_mcp/
 5. **"Failed to validate request" errors**
    - This is normal during initialization
    - The server needs proper MCP handshake before accepting tool calls
+
+6. **"OpenAI API key is required for embeddings" error**
+   - The system requires OpenAI API key for semantic embeddings
+   - Set `OPENAI_API_KEY` in your `.env` file or environment
+   - This is required even if you're using other LLMs for idea generation
+   - Embeddings are essential for accurate fitness evaluation
 
 ### Debug Mode
 

@@ -1,13 +1,14 @@
 """Fitness evaluation for ideas with multi-objective optimization support."""
 
-import logging
+import time
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
+from .logging_config import log_operation, log_performance, setup_logging
 from .models import FitnessWeights, Idea
 
-logger = logging.getLogger(__name__)
+logger = setup_logging(component="fitness")
 
 
 class FitnessEvaluator:
@@ -26,7 +27,8 @@ class FitnessEvaluator:
         self.weight_history: list[FitnessWeights] = []
 
     def calculate_fitness(self, idea: Idea, all_ideas: list[Idea],
-                         target_embedding: list[float]) -> float:
+                         target_embedding: list[float],
+                         claude_evaluation_weight: float = 0.0) -> float:
         """Calculate overall fitness score for an idea."""
         # Get individual scores
         relevance = self._calculate_relevance(idea, target_embedding)
@@ -48,6 +50,23 @@ class FitnessEvaluator:
         )
 
         idea.fitness = fitness
+
+        # If Claude evaluation is available, combine scores
+        if idea.claude_score is not None and claude_evaluation_weight > 0:
+            algorithmic_weight = 1.0 - claude_evaluation_weight
+            idea.combined_fitness = (
+                algorithmic_weight * fitness +
+                claude_evaluation_weight * idea.claude_score
+            )
+            logger.debug(f"Combined fitness for idea {idea.id}: "
+                        f"algorithmic={fitness:.3f}, claude={idea.claude_score:.3f}, "
+                        f"combined={idea.combined_fitness:.3f}")
+            return idea.combined_fitness
+
+        logger.debug(f"Calculated fitness for idea {idea.id}: "
+                    f"fitness={fitness:.3f}, relevance={relevance:.3f}, "
+                    f"novelty={novelty:.3f}, feasibility={feasibility:.3f}")
+
         return fitness
 
     def _calculate_relevance(self, idea: Idea, target_embedding: list[float]) -> float:
@@ -128,10 +147,23 @@ class FitnessEvaluator:
         """Add embedding to cache."""
         self.embeddings_cache[idea_id] = embedding
 
-    def evaluate_population(self, ideas: list[Idea], target_embedding: list[float]) -> None:
+    def evaluate_population(self, ideas: list[Idea], target_embedding: list[float],
+                          claude_evaluation_weight: float = 0.0) -> None:
         """Evaluate fitness for entire population."""
+        start_time = time.time()
+        log_operation(logger, "EVALUATE_POPULATION", population_size=len(ideas))
+
         for idea in ideas:
-            self.calculate_fitness(idea, ideas, target_embedding)
+            self.calculate_fitness(idea, ideas, target_embedding, claude_evaluation_weight)
+
+        # Log population statistics
+        fitnesses = [idea.combined_fitness if idea.combined_fitness is not None else idea.fitness
+                    for idea in ideas]
+        log_performance(logger, "EVALUATE_POPULATION", time.time() - start_time,
+                       population_size=len(ideas),
+                       avg_fitness=np.mean(fitnesses),
+                       max_fitness=max(fitnesses) if fitnesses else 0,
+                       min_fitness=min(fitnesses) if fitnesses else 0)
 
     def get_selection_probabilities(self, ideas: list[Idea]) -> list[float]:
         """Get selection probabilities based on fitness (roulette wheel)."""

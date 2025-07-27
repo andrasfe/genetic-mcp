@@ -63,6 +63,10 @@ make run-http
 
 # Run with debug logging
 make debug
+
+# Run without installation
+uv run genetic-mcp
+python -m genetic_mcp.server
 ```
 
 ## Architecture
@@ -71,13 +75,15 @@ The system follows a modular architecture with clear separation of concerns:
 
 ### Core Components
 
-1. **MCP Server** (`server.py`): FastMCP-based server implementing 6 genetic algorithm tools
+1. **MCP Server** (`server.py`): FastMCP-based server implementing 8 genetic algorithm tools
    - `create_session`: Initialize GA session with configuration (supports client-generated mode)
    - `run_generation`: Execute the complete generation process
    - `inject_ideas`: Inject client-generated ideas into a session (client-generated mode only)
    - `get_progress`: Monitor session progress in real-time
    - `get_session`: Retrieve detailed session information with pagination
    - `set_fitness_weights`: Dynamically adjust fitness evaluation weights
+   - `get_optimization_stats`: Get optimization capabilities and usage statistics
+   - `get_optimization_report`: Detailed optimization report for a session
 
 2. **Session Manager** (`session_manager.py`): Manages GA session lifecycle
    - Thread-safe session storage with TTL (1 hour default)
@@ -157,6 +163,7 @@ The system follows a modular architecture with clear separation of concerns:
 - Sessions expire after 1 hour of inactivity
 - Background task cleans up expired sessions every 5 minutes
 - Thread-safe operations using asyncio locks
+- Session state validation ensures proper workflow
 
 ### Error Handling
 - Comprehensive retry logic for LLM API failures
@@ -174,7 +181,9 @@ The system follows a modular architecture with clear separation of concerns:
 ## Environment Configuration
 
 Key environment variables:
-- `OPENROUTER_API_KEY`: Required for LLM access (configured in .env)
+- `OPENAI_API_KEY`: Required for embeddings (configured in .env)
+- `OPENROUTER_API_KEY`: Required for LLM generation (configured in .env)
+- `ANTHROPIC_API_KEY`: Optional alternative LLM provider
 - `OPENROUTER_MODEL`: OpenRouter model to use (default: meta-llama/llama-3.2-3b-instruct)
 - `OPENAI_MODEL`: OpenAI model to use (default: gpt-4-turbo-preview)
 - `ANTHROPIC_MODEL`: Anthropic model to use (default: claude-3-opus-20240229)
@@ -233,9 +242,14 @@ If clients disconnect during long-running operations:
 Example configuration for faster operations:
 ```json
 {
-  "population_size": 20,
+  "population_size": 10,
   "generations": 3,
-  "worker_pool_size": 5
+  "top_k": 5,
+  "fitness_weights": {
+    "relevance": 0.4,
+    "novelty": 0.3,
+    "feasibility": 0.3
+  }
 }
 ```
 
@@ -254,3 +268,26 @@ Example scripts in the `examples/` directory:
 - `client_generated_example.py`: Example of client-generated mode with Claude
 - `gpu_accelerated_example.py`: GPU-accelerated fitness computation example
 - `test_integration.py`: Integration testing examples
+
+## Quick Start
+
+1. Install with development dependencies:
+   ```bash
+   make install-dev
+   ```
+
+2. Set up API keys in `.env`:
+   ```bash
+   OPENAI_API_KEY=your-openai-key
+   OPENROUTER_API_KEY=your-openrouter-key
+   ```
+
+3. Run tests to verify setup:
+   ```bash
+   make test
+   ```
+
+4. Start the server:
+   ```bash
+   make run
+   ```

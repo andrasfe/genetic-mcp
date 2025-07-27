@@ -1,14 +1,15 @@
 """Genetic algorithm implementation for idea evolution."""
 
-import logging
 import random
 import re
+import time
 
 import numpy as np
 
+from .logging_config import log_operation, log_performance, setup_logging
 from .models import GeneticParameters, Idea
 
-logger = logging.getLogger(__name__)
+logger = setup_logging(component="genetic_algorithm")
 
 
 class GeneticAlgorithm:
@@ -235,6 +236,7 @@ class GeneticAlgorithm:
         """Perform crossover between two parent ideas."""
         if random.random() > self.parameters.crossover_rate:
             # No crossover, return parents as-is
+            logger.debug(f"Skipping crossover (rate={self.parameters.crossover_rate})")
             return parent1.content, parent2.content
 
         # Extract sentences or key points from both parents
@@ -254,6 +256,10 @@ class GeneticAlgorithm:
 
         offspring1 = " ".join(offspring1_parts)
         offspring2 = " ".join(offspring2_parts)
+
+        logger.debug(f"Performed crossover: parent1={len(sentences1)} sentences, "
+                    f"parent2={len(sentences2)} sentences, "
+                    f"crossover_points=({crossover_point1}, {crossover_point2})")
 
         return offspring1, offspring2
 
@@ -280,9 +286,11 @@ class GeneticAlgorithm:
 
             # If mutation produced a change, return it
             if mutated != original_content:
+                logger.debug(f"Applied {mutation_type} mutation")
                 return mutated
 
         # If no mutation produced a change, force a simple change
+        logger.debug("Forced mutation after no changes")
         return f"{content} (mutated)"
 
     def _extract_sentences(self, content: str) -> list[str]:
@@ -533,6 +541,12 @@ class GeneticAlgorithm:
                              use_fitness_sharing: bool = False,
                              use_crowding: bool = False) -> list[Idea]:
         """Create next generation using genetic operations with optional diversity preservation."""
+        start_time = time.time()
+        log_operation(logger, "CREATE_NEXT_GENERATION",
+                      generation=generation,
+                      population_size=len(population),
+                      selection_method=selection_method)
+
         # Update adaptive parameters
         self.update_adaptive_parameters(population)
 
@@ -604,7 +618,14 @@ class GeneticAlgorithm:
                 new_population.append(offspring2)
 
         # Trim to exact population size if needed
-        return new_population[:self.parameters.population_size]
+        final_population = new_population[:self.parameters.population_size]
+
+        log_performance(logger, "CREATE_NEXT_GENERATION", time.time() - start_time,
+                       generation=generation,
+                       population_size=len(final_population),
+                       elites_preserved=self.parameters.elitism_count)
+
+        return final_population
 
     def check_convergence(self, population: list[Idea], window_size: int = 5) -> bool:
         """Check if the population has converged using multiple criteria.

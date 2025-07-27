@@ -32,6 +32,11 @@ class Idea(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # Claude evaluation fields
+    claude_evaluation: dict[str, Any] | None = None  # Structured evaluation from Claude
+    claude_score: float | None = None  # Claude's overall score (0-1)
+    combined_fitness: float | None = None  # Combined algorithmic + Claude fitness
+
 
 class Worker(BaseModel):
     """Represents an LLM worker."""
@@ -98,6 +103,8 @@ class Session(BaseModel):
     current_generation: int = 0
     status: str = "active"
     client_generated: bool = False  # Whether client generates ideas instead of LLM workers
+    claude_evaluation_enabled: bool = False  # Whether Claude assists with evaluation
+    claude_evaluation_weight: float = 0.5  # Weight for Claude's evaluation (0-1)
     ideas_per_generation_received: dict[int, int] = Field(default_factory=dict)  # Track ideas received per generation
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -145,3 +152,19 @@ class GenerationResult(BaseModel):
     generations_completed: int
     lineage: dict[str, list[str]] = Field(default_factory=dict)  # idea_id -> parent_ids
     execution_time_seconds: float
+
+
+class ClaudeEvaluationRequest(BaseModel):
+    """Request for Claude to evaluate ideas."""
+    session_id: str
+    ideas: list[Idea]  # Ideas to evaluate
+    prompt: str  # Original prompt for context
+    evaluation_criteria: dict[str, str] | None = None  # Custom evaluation criteria
+    batch_size: int = Field(default=10, ge=1, le=50)  # Max ideas per evaluation
+
+
+class ClaudeEvaluationResponse(BaseModel):
+    """Response from Claude's evaluation."""
+    session_id: str
+    evaluations: dict[str, dict[str, Any]]  # idea_id -> evaluation
+    evaluation_time_seconds: float
