@@ -171,6 +171,8 @@ Built by a team of collaborative AI agents:
 claude mcp add genetic-mcp \
   -e OPENROUTER_API_KEY="your-api-key-here" \
   -e OPENAI_API_KEY="your-oai-api-key-here" \
+  -e OPENROUTER_MODEL="meta-llama/llama-3.2-3b-instruct" \
+  -e OPENAI_MODEL="gpt-4-turbo-preview" \
   -- uvx --from git+https://github.com/YOUR_USERNAME/genetic-mcp.git genetic-mcp
 ```
 
@@ -188,6 +190,8 @@ uv pip install -e .  # or: pip install -e .
 2. **Configure in Claude Desktop:**
 
 Edit `~/.claude/claude_desktop_config.json`:
+
+For running from installed package:
 ```json
 {
   "mcpServers": {
@@ -195,8 +199,36 @@ Edit `~/.claude/claude_desktop_config.json`:
       "command": "genetic-mcp",
       "args": [],
       "env": {
+        "OPENROUTER_API_KEY": "your-openrouter-api-key",
+        "OPENAI_API_KEY": "your-openai-api-key",
+        "OPENROUTER_MODEL": "meta-llama/llama-3.3-8b-instruct",
+        "OPENAI_MODEL": "gpt-4-turbo-preview",
         "GENETIC_MCP_DEBUG": "false",
         "GENETIC_MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}
+```
+
+For running locally with uv:
+```json
+{
+  "mcpServers": {
+    "genetic-mcp": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "-m",
+        "genetic_mcp.server"
+      ],
+      "env": {
+        "OPENROUTER_API_KEY": "your-openrouter-api-key",
+        "OPENAI_API_KEY": "your-openai-api-key", 
+        "OPENROUTER_MODEL": "meta-llama/llama-3.3-8b-instruct",
+        "OPENAI_MODEL": "gpt-4-turbo-preview",
+        "EMBEDDING_MODEL": "text-embedding-ada-002"
       }
     }
   }
@@ -224,6 +256,10 @@ Then configure Claude Desktop to use the local command:
       "command": "uv",
       "args": ["--directory", "/path/to/genetic-mcp", "run", "genetic-mcp"],
       "env": {
+        "OPENROUTER_API_KEY": "your-openrouter-api-key",
+        "OPENAI_API_KEY": "your-openai-api-key",
+        "OPENROUTER_MODEL": "meta-llama/llama-3.2-3b-instruct",
+        "OPENAI_MODEL": "gpt-4-turbo-preview",
         "GENETIC_MCP_DEBUG": "false",
         "GENETIC_MCP_TRANSPORT": "stdio"
       }
@@ -263,6 +299,8 @@ ANTHROPIC_MODEL=claude-3-opus-20240229             # Default model for Anthropic
   - Examples: `openai/gpt-4o`, `anthropic/claude-3.5-sonnet`, `google/gemini-2.0-flash-thinking-exp-1219:free`
 - `OPENAI_MODEL`: Model to use with OpenAI (default: `gpt-4-turbo-preview`)
 - `ANTHROPIC_MODEL`: Model to use with Anthropic (default: `claude-3-opus-20240229`)
+- `EMBEDDING_MODEL`: Model to use for text embeddings (default: `text-embedding-ada-002`)
+  - Examples: `text-embedding-3-small`, `text-embedding-3-large`
 
 #### System Configuration
 - `GENETIC_MCP_TRANSPORT`: Transport mode (`stdio` for MCP, `http` for web)

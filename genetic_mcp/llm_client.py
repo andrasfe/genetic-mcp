@@ -1,6 +1,7 @@
 """LLM client for interacting with various language models."""
 
 import logging
+import os
 from abc import ABC, abstractmethod
 
 from anthropic import AsyncAnthropic
@@ -30,7 +31,7 @@ class OpenAIClient(LLMClient):
     def __init__(self, api_key: str, model: str = "gpt-4-turbo-preview"):
         self.client = AsyncOpenAI(api_key=api_key)
         self.model = model
-        self.embedding_model = "text-embedding-ada-002"
+        self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")
 
     async def generate(self, prompt: str, system_prompt: str | None = None,
                       temperature: float = 0.7, max_tokens: int = 1000) -> str:
@@ -107,7 +108,7 @@ class AnthropicClient(LLMClient):
 
         try:
             response = await self._openai_client.embeddings.create(
-                model="text-embedding-ada-002",
+                model=os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"),
                 input=text
             )
             return response.data[0].embedding
@@ -125,7 +126,7 @@ class OpenRouterClient(LLMClient):
             base_url="https://openrouter.ai/api/v1"
         )
         self.model = model
-        self.embedding_model = "text-embedding-ada-002"  # Will use OpenAI fallback
+        self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")  # Will use OpenAI fallback
         self._openai_client = None
         self._openai_api_key = None
 
@@ -164,7 +165,7 @@ class OpenRouterClient(LLMClient):
 
         try:
             response = await self._openai_client.embeddings.create(
-                model="text-embedding-ada-002",
+                model=os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"),
                 input=text
             )
             return response.data[0].embedding
