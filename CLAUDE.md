@@ -6,11 +6,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Genetic MCP is a Model Context Protocol (MCP) server implementing genetic algorithm-based idea generation using parallel LLM workers, multi-objective fitness evaluation, and evolutionary optimization. It enables AI-powered creative problem solving through evolutionary computation.
 
-## New Memory & Learning System
+## New Features
 
-The genetic-mcp now includes a comprehensive Memory & Learning System that persistently learns from successful evolution patterns and provides intelligent parameter recommendations for new sessions.
+### Session Persistence System
 
-### Memory System Features
+The genetic-mcp now includes a comprehensive persistence system that allows saving, loading, and resuming sessions after interruption.
+
+#### Persistence Features
+
+- **Complete Session State**: Saves all ideas, populations, configurations, and progress
+- **Auto-Save**: Automatic checkpoints every 3 minutes during evolution
+- **Database Storage**: SQLite database (genetic_mcp_sessions.db) stores all session data
+- **Checkpoint System**: Named checkpoints with incremental saves
+- **Session Recovery**: Full reconstruction of interrupted sessions
+- **Compression**: Gzip compression for embeddings and large state objects
+
+#### Persistence MCP Tools
+
+- `save_session`: Save current session state to database
+- `load_session`: Load session details from database
+- `resume_session`: Resume a saved session (load + activate)
+- `list_saved_sessions`: Browse saved sessions with filtering
+
+### Memory & Learning System
+
+The genetic-mcp includes a comprehensive Memory & Learning System that persistently learns from successful evolution patterns and provides intelligent parameter recommendations for new sessions.
+
+#### Memory System Features
 
 - **Automatic Prompt Categorization**: Intelligently categorizes prompts (code_generation, creative_writing, business_ideas, problem_solving, research_analysis, design_concepts)
 - **Parameter Optimization**: Learns optimal genetic algorithm parameters based on historical performance
@@ -19,17 +41,17 @@ The genetic-mcp now includes a comprehensive Memory & Learning System that persi
 - **Transfer Learning**: Applies learnings from similar past prompts to new sessions
 - **Embedding-Based Similarity**: Uses semantic similarity to match prompts with historical data
 
-### Environment Variables
+#### Memory System Environment Variables
 
 - `GENETIC_MCP_MEMORY_ENABLED`: Enable/disable memory system (default: true)
 - `GENETIC_MCP_MEMORY_DB`: Path to SQLite database (default: genetic_mcp_memory.db)
 
-### New MCP Tools
+#### Memory MCP Tools
 
 - `get_memory_stats`: Get current memory system status and statistics
 - `get_category_insights`: Get insights and recommendations for specific prompt categories
 
-### Memory System Integration
+#### Memory System Integration
 
 When creating sessions, the memory system:
 1. Automatically categorizes the input prompt
@@ -51,7 +73,7 @@ uv pip install -e ".[dev]"
 
 ### Testing
 ```bash
-# Run all tests (42 tests currently passing)
+# Run all tests (126+ tests currently passing)
 make test
 
 # Run unit tests only
@@ -255,18 +277,22 @@ The system follows a modular architecture with clear separation of concerns:
 Key environment variables:
 
 ### LLM Provider Configuration
+- `MODEL`: **REQUIRED** - Default model for idea generation (e.g., meta-llama/llama-3.2-3b-instruct)
 - `OPENROUTER_API_KEY`: Required for LLM generation (configured in .env)
 - `ANTHROPIC_API_KEY`: Optional alternative LLM provider
-- `OPENROUTER_MODEL`: OpenRouter model to use (default: meta-llama/llama-3.2-3b-instruct)
-- `OPENAI_MODEL`: OpenAI model to use (default: gpt-4-turbo-preview)
-- `ANTHROPIC_MODEL`: Anthropic model to use (default: claude-3-opus-20240229)
+- `OPENROUTER_MODEL`: OpenRouter-specific model override (defaults to MODEL)
+- `OPENAI_MODEL`: OpenAI-specific model override (defaults to MODEL if GPT model)
+- `ANTHROPIC_MODEL`: Anthropic-specific model override (defaults to MODEL if Claude model)
 
 ### Embedding Provider Configuration
 - `EMBEDDING_PROVIDER`: Choose embedding backend (openai/sentence-transformer/cohere/voyage/dummy)
+- `EMBEDDING_MODEL`: Model name for the chosen provider
+  - Cohere: `embed-english-v3.0`, `embed-multilingual-v3.0`, etc.
+  - OpenAI: `text-embedding-ada-002`, `text-embedding-3-small`, etc.
+  - Sentence-Transformer: `all-MiniLM-L6-v2` (local, no API needed)
 - `OPENAI_API_KEY`: For OpenAI embeddings (optional if using other providers)
 - `COHERE_API_KEY`: For Cohere embeddings (optional)
 - `VOYAGE_API_KEY`: For Voyage AI embeddings (optional)
-- `EMBEDDING_MODEL`: Model name for the chosen provider (provider-specific defaults apply)
 
 ### Server Configuration
 - `GENETIC_MCP_TRANSPORT`: Transport mode (stdio/http)

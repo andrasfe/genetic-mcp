@@ -15,6 +15,7 @@ A Model Context Protocol (MCP) server implementing genetic algorithm-based idea 
 - **Lineage Tracking**: Complete evolution history and parent-child relationships
 
 ### Advanced Features (New)
+- **Session Persistence**: Complete save/load/resume capability with auto-save every 3 minutes
 - **Temperature Variation**: Dynamic temperature control for balanced exploration/exploitation
 - **Adaptive Population Size**: Automatically adjusts population based on diversity metrics
 - **Memory & Learning System**: Persistent learning from past sessions with parameter optimization
@@ -284,35 +285,49 @@ Then configure Claude Desktop to use the local command:
 
 Create a `.env` file in the project root:
 ```bash
-# Required API keys
-OPENAI_API_KEY=your-openai-api-key        # Required for embeddings
-OPENROUTER_API_KEY=your-openrouter-api-key # Required for LLM generation
+# REQUIRED: Default model for idea generation
+MODEL=meta-llama/llama-3.2-3b-instruct
 
-# Optional API key
-ANTHROPIC_API_KEY=your-anthropic-api-key  # Optional alternative LLM
+# Required API key for LLM generation
+OPENROUTER_API_KEY=your-openrouter-api-key
 
-# LLM Model Configuration
-OPENROUTER_MODEL=meta-llama/llama-3.2-3b-instruct  # Default model for OpenRouter
-OPENAI_MODEL=gpt-4-turbo-preview                   # Default model for OpenAI
-ANTHROPIC_MODEL=claude-3-opus-20240229             # Default model for Anthropic
+# Optional API keys
+ANTHROPIC_API_KEY=your-anthropic-api-key  # Alternative LLM provider
+OPENAI_API_KEY=your-openai-api-key        # For OpenAI embeddings
+COHERE_API_KEY=your-cohere-api-key        # For Cohere embeddings
+
+# Embedding Configuration  
+EMBEDDING_PROVIDER=cohere                  # Options: openai, cohere, sentence-transformer
+EMBEDDING_MODEL=embed-english-v3.0         # Model for chosen provider
+
+# Persistence Configuration
+GENETIC_MCP_MEMORY_ENABLED=true           # Enable memory system for learning
+GENETIC_MCP_MEMORY_DB=genetic_mcp_memory.db  # Database for memory system
 ```
 
 ### Environment Variables
 
+#### Core Configuration
+- `MODEL`: **REQUIRED** - Default model for idea generation (e.g., `meta-llama/llama-3.2-3b-instruct`)
+
 #### API Configuration
-- `OPENAI_API_KEY`: OpenAI API key (required for embeddings)
 - `OPENROUTER_API_KEY`: OpenRouter API key (required for LLM generation)
 - `ANTHROPIC_API_KEY`: Anthropic API key (optional alternative LLM)
-- `COHERE_API_KEY`: Cohere API key (optional for embeddings)
-- `VOYAGE_API_KEY`: Voyage AI API key (optional for embeddings)
+- `OPENAI_API_KEY`: OpenAI API key (optional, for OpenAI embeddings)
+- `COHERE_API_KEY`: Cohere API key (optional, for Cohere embeddings)
+- `VOYAGE_API_KEY`: Voyage AI API key (optional, for Voyage embeddings)
 
-#### Model Selection
-- `OPENROUTER_MODEL`: Model to use with OpenRouter (default: `meta-llama/llama-3.2-3b-instruct`)
-  - Examples: `openai/gpt-4o`, `anthropic/claude-3.5-sonnet`, `google/gemini-2.0-flash-thinking-exp-1219:free`
-- `OPENAI_MODEL`: Model to use with OpenAI (default: `gpt-4-turbo-preview`)
-- `ANTHROPIC_MODEL`: Model to use with Anthropic (default: `claude-3-opus-20240229`)
-- `EMBEDDING_MODEL`: Model to use for text embeddings (default: `text-embedding-ada-002`)
-  - Examples: `text-embedding-3-small`, `text-embedding-3-large`
+#### Embedding Configuration
+- `EMBEDDING_PROVIDER`: Embedding backend (`openai`, `cohere`, `sentence-transformer`, `voyage`, `dummy`)
+- `EMBEDDING_MODEL`: Model for chosen provider
+  - Cohere: `embed-english-v3.0`, `embed-multilingual-v3.0`
+  - OpenAI: `text-embedding-ada-002`, `text-embedding-3-small`
+  - Sentence-Transformer: `all-MiniLM-L6-v2` (local, no API needed)
+
+#### Model Overrides (Optional)
+- `OPENROUTER_MODEL`: OpenRouter-specific model override (defaults to MODEL)
+- `OPENAI_MODEL`: OpenAI-specific model override (defaults to MODEL)
+- `ANTHROPIC_MODEL`: Anthropic-specific model override (defaults to MODEL)
 
 #### System Configuration
 - `GENETIC_MCP_TRANSPORT`: Transport mode (`stdio` for MCP, `http` for web)
@@ -475,6 +490,41 @@ Get insights for a specific prompt category:
 }
 ```
 
+### 14. save_session
+Save current session state to database:
+```json
+{
+  "session_id": "session-uuid",
+  "checkpoint_name": "checkpoint-1"  // Optional: name for checkpoint
+}
+```
+
+### 15. load_session
+Load session details from database:
+```json
+{
+  "session_id": "session-uuid"
+}
+```
+
+### 16. resume_session
+Resume a saved session (load + make active):
+```json
+{
+  "session_id": "session-uuid"
+}
+```
+
+### 17. list_saved_sessions
+List saved sessions with filtering:
+```json
+{
+  "client_id": "optional-client-filter",
+  "limit": 50,
+  "offset": 0
+}
+```
+
 ## Usage Example
 
 ### Standard Mode (LLM-Generated Ideas)
@@ -517,7 +567,7 @@ results = await generation_task
 ## Testing
 
 ```bash
-# Run all tests (105+ tests currently passing)
+# Run all tests (126+ tests currently passing)
 pytest tests/ -v
 
 # Run unit tests only
@@ -545,7 +595,8 @@ make format
 genetic_mcp/
 ├── models.py                    # Pydantic data models (v2)
 ├── server.py                    # FastMCP server implementation
-├── session_manager.py           # Session lifecycle management
+├── session_manager.py           # Session lifecycle management (with auto-save)
+├── persistence_manager.py       # Session persistence & recovery system
 ├── worker_pool.py               # Async LLM worker orchestration (with temperature variation)
 ├── genetic_algorithm.py         # Core GA operations
 ├── genetic_algorithm_optimized.py # Enhanced GA with adaptive strategies
@@ -561,7 +612,7 @@ genetic_mcp/
 ├── intelligent_mutation.py      # 9 mutation strategies with learning
 ├── embedding_providers.py       # Multiple embedding backends
 ├── gpu_*.py                     # GPU acceleration modules
-└── tests/                       # Comprehensive test suite (105+ tests)
+└── tests/                       # Comprehensive test suite (126+ tests)
 ```
 
 ## Logging
