@@ -106,6 +106,37 @@ class Session(BaseModel):
     claude_evaluation_enabled: bool = False  # Whether Claude assists with evaluation
     claude_evaluation_weight: float = 0.5  # Weight for Claude's evaluation (0-1)
     ideas_per_generation_received: dict[int, int] = Field(default_factory=dict)  # Track ideas received per generation
+    adaptive_population_enabled: bool = False  # Whether adaptive population size is enabled
+    adaptive_population_config: dict[str, Any] = Field(default_factory=dict)  # Config for adaptive population
+    memory_enabled: bool = False  # Whether to use memory system for parameter optimization
+    parameter_recommendation: dict[str, Any] = Field(default_factory=dict)  # Store parameter recommendation used
+    execution_time_seconds: float = 0.0  # Track execution time for memory learning
+
+    # Hybrid selection strategy configuration
+    hybrid_selection_enabled: bool = False  # Whether to use hybrid selection strategies
+    selection_strategy: str | None = None  # Manual strategy override (e.g., "tournament", "roulette_wheel")
+    selection_adaptation_window: int = 5  # Number of generations for performance tracking
+    selection_exploration_constant: float = 2.0  # UCB1 exploration parameter
+    selection_min_uses_per_strategy: int = 3  # Minimum uses before adaptation
+    selection_performance_history: dict[str, Any] = Field(default_factory=dict)  # Strategy performance tracking
+
+    # Advanced crossover configuration
+    advanced_crossover_enabled: bool = False  # Whether to use advanced crossover operators
+    crossover_strategy: str | None = None  # Manual crossover operator override (e.g., "semantic", "multi_point")
+    crossover_adaptation_enabled: bool = True  # Whether to adaptively select crossover operators
+    crossover_performance_tracking: bool = True  # Track crossover operator performance
+    crossover_performance_history: dict[str, Any] = Field(default_factory=dict)  # Crossover performance tracking
+    crossover_config: dict[str, Any] = Field(default_factory=dict)  # Additional crossover configuration
+
+    # Intelligent mutation configuration
+    intelligent_mutation_enabled: bool = False  # Whether to use intelligent mutation strategies
+    mutation_strategy: str | None = None  # Manual mutation strategy override (e.g., "guided", "adaptive", "memetic")
+    mutation_adaptation_enabled: bool = True  # Whether to adaptively learn mutation patterns
+    mutation_performance_tracking: bool = True  # Track mutation strategy performance
+    mutation_performance_history: dict[str, Any] = Field(default_factory=dict)  # Mutation performance tracking
+    mutation_config: dict[str, Any] = Field(default_factory=dict)  # Additional mutation configuration
+    target_embedding: list[float] | None = None  # Target embedding for guided mutations
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -117,6 +148,39 @@ class Session(BaseModel):
         """Get top K ideas by fitness score."""
         sorted_ideas = sorted(self.ideas, key=lambda x: x.fitness, reverse=True)
         return sorted_ideas[:k]
+
+    def get_current_generation_ideas(self) -> list[Idea]:
+        """Get ideas from the current generation."""
+        return [idea for idea in self.ideas if idea.generation == self.current_generation]
+
+    def get_population_for_generation(self, generation: int) -> list[Idea]:
+        """Get population for a specific generation."""
+        return [idea for idea in self.ideas if idea.generation == generation]
+
+    def get_recommended_population_size(self, diversity_metrics: dict[str, float] = None) -> int:
+        """Get recommended population size for next generation using adaptive population management."""
+        if not self.adaptive_population_enabled or not hasattr(self, '_adaptive_population_manager'):
+            return self.parameters.population_size
+
+        # Get current generation population
+        current_population = self.get_current_generation_ideas()
+        if not current_population:
+            current_population = self.ideas[-self.parameters.population_size:] if self.ideas else []
+
+        # Analyze current population
+        current_metrics = self._adaptive_population_manager.analyze_population(
+            current_population, self.current_generation, diversity_metrics
+        )
+
+        # Get recommendation for next generation
+        return self._adaptive_population_manager.get_recommended_population_size(
+            current_metrics, self.current_generation + 1
+        )
+
+    def update_population_size_dynamically(self, new_size: int) -> None:
+        """Update population size for next generation."""
+        if hasattr(self, '_adaptive_population_manager'):
+            self._adaptive_population_manager.update_session_population_size(self, new_size)
 
 
 class GenerationRequest(BaseModel):
@@ -130,6 +194,28 @@ class GenerationRequest(BaseModel):
     fitness_weights: FitnessWeights | None = None
     models: list[str] | None = None  # LLM models to use
     client_generated: bool = Field(default=False)  # Whether client generates ideas instead of LLM workers
+    adaptive_population: bool = Field(default=False)  # Enable adaptive population size
+    adaptive_population_config: dict[str, Any] | None = None  # Configuration for adaptive population
+    use_memory_system: bool = Field(default=True)  # Whether to use memory system for parameter optimization
+    optimization_level: str | None = None  # Optimization level: 'low', 'medium', 'high', 'auto'
+
+    # Hybrid selection strategy options
+    hybrid_selection_enabled: bool = Field(default=False)  # Enable hybrid selection strategies
+    selection_strategy: str | None = None  # Manual strategy override
+    selection_adaptation_window: int = Field(default=5, ge=1)  # Performance tracking window
+    selection_exploration_constant: float = Field(default=2.0, ge=0.1)  # UCB1 exploration parameter
+
+    # Advanced crossover options
+    advanced_crossover_enabled: bool = Field(default=False)  # Enable advanced crossover operators
+    crossover_strategy: str | None = None  # Manual crossover operator override
+    crossover_adaptation_enabled: bool = Field(default=True)  # Enable adaptive crossover selection
+    crossover_config: dict[str, Any] | None = None  # Additional crossover configuration
+
+    # Intelligent mutation options
+    intelligent_mutation_enabled: bool = Field(default=False)  # Enable intelligent mutation strategies
+    mutation_strategy: str | None = None  # Manual mutation strategy override
+    mutation_adaptation_enabled: bool = Field(default=True)  # Enable adaptive mutation learning
+    mutation_config: dict[str, Any] | None = None  # Additional mutation configuration
 
 
 class GenerationProgress(BaseModel):

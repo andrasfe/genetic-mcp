@@ -26,7 +26,7 @@ COLORS = {
 class ColoredFormatter(logging.Formatter):
     """Custom formatter that adds colors to console output."""
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         # Add color to the level name
         levelname = record.levelname
         if levelname in COLORS and sys.stderr.isatty():
@@ -78,13 +78,13 @@ def setup_logging(
     # File handler if specified
     if log_file or os.getenv("GENETIC_MCP_LOG_FILE"):
         file_path = log_file or os.getenv("GENETIC_MCP_LOG_FILE")
-        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-
-        file_handler = logging.FileHandler(file_path)
-        file_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        file_formatter = logging.Formatter(file_format)
-        file_handler.setFormatter(file_formatter)
-        logger.addHandler(file_handler)
+        if file_path:
+            Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(file_path)
+            file_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            file_formatter = logging.Formatter(file_format)
+            file_handler.setFormatter(file_formatter)
+            logger.addHandler(file_handler)
 
     return logger
 
@@ -103,19 +103,19 @@ def get_logger(component: str) -> logging.Logger:
 
 
 # Structured logging helpers
-def log_operation(logger: logging.Logger, operation: str, **kwargs):
+def log_operation(logger: logging.Logger, operation: str, **kwargs: object) -> None:
     """Log an operation with structured context."""
     context = " ".join(f"{k}={v}" for k, v in kwargs.items())
     logger.info(f"[{operation}] {context}")
 
 
-def log_error(logger: logging.Logger, operation: str, error: Exception, **kwargs):
+def log_error(logger: logging.Logger, operation: str, error: Exception, **kwargs: object) -> None:
     """Log an error with structured context."""
     context = " ".join(f"{k}={v}" for k, v in kwargs.items())
     logger.error(f"[{operation}] {context} error={type(error).__name__}: {str(error)}")
 
 
-def log_performance(logger: logging.Logger, operation: str, duration: float, **kwargs):
+def log_performance(logger: logging.Logger, operation: str, duration: float, **kwargs: object) -> None:
     """Log performance metrics."""
     context = " ".join(f"{k}={v}" for k, v in kwargs.items())
     logger.info(f"[{operation}] duration={duration:.3f}s {context}")

@@ -3,9 +3,11 @@
 import random
 import re
 import time
+from typing import Any
 
 import numpy as np
 
+from .hybrid_selection import HybridSelectionManager, SelectionStrategy
 from .logging_config import log_operation, log_performance, setup_logging
 from .models import GeneticParameters, Idea
 
@@ -15,7 +17,10 @@ logger = setup_logging(component="genetic_algorithm")
 class GeneticAlgorithm:
     """Implements genetic algorithm operations for idea evolution."""
 
-    def __init__(self, parameters: GeneticParameters | None = None):
+    def __init__(self, parameters: GeneticParameters | None = None,
+                 hybrid_selection_enabled: bool = False,
+                 selection_adaptation_window: int = 5,
+                 selection_exploration_constant: float = 2.0):
         self.parameters = parameters or GeneticParameters()
 
         # Adaptive parameter tracking
@@ -29,18 +34,46 @@ class GeneticAlgorithm:
         self.sus_pointers = 2  # Stochastic Universal Sampling pointers
         self.rank_selection_pressure = 2.0  # Linear ranking parameter
 
+        # Hybrid selection manager
+        self.hybrid_selection_enabled = hybrid_selection_enabled
+        self.hybrid_selection_manager: HybridSelectionManager | None = None
+        if hybrid_selection_enabled:
+            self.hybrid_selection_manager = HybridSelectionManager(
+                adaptation_window=selection_adaptation_window,
+                exploration_constant=selection_exploration_constant
+            )
+
     def select_parents(self, population: list[Idea], probabilities: list[float],
-                       method: str = "roulette") -> tuple[Idea, Idea]:
+                       method: str = "roulette", generation: int = 0) -> tuple[Idea, Idea]:
         """Select two parents for crossover using specified selection method.
 
         Args:
             population: List of ideas to select from
             probabilities: Selection probabilities for each idea
             method: Selection method - 'roulette', 'tournament', 'boltzmann', 'sus', 'rank'
+            generation: Current generation number
 
         Returns:
             Tuple of two parent ideas
         """
+        # Use hybrid selection manager if enabled
+        if self.hybrid_selection_enabled and self.hybrid_selection_manager:
+            # Let hybrid manager choose the strategy
+            if method == "adaptive":
+                strategy = self.hybrid_selection_manager.select_strategy(population, generation)
+                method = strategy.value
+
+            # Use hybrid manager for selection
+            try:
+                selected_parents = self.hybrid_selection_manager.perform_selection(
+                    population, SelectionStrategy(method), num_parents=2
+                )
+                return selected_parents[0], selected_parents[1]
+            except (ValueError, IndexError):
+                # Fallback to traditional method if hybrid selection fails
+                logger.warning(f"Hybrid selection failed, falling back to {method}")
+
+        # Traditional selection methods
         if method == "tournament":
             return self._tournament_selection(population)
         elif method == "boltzmann":
@@ -590,7 +623,7 @@ class GeneticAlgorithm:
         # Generate rest of population through crossover and mutation
         while len(new_population) < self.parameters.population_size:
             # Select parents using specified method
-            parent1, parent2 = self.select_parents(population, probabilities, method=selection_method)
+            parent1, parent2 = self.select_parents(population, probabilities, method=selection_method, generation=generation)
 
             # Perform crossover
             offspring1_content, offspring2_content = self.crossover(parent1, parent2)
@@ -698,3 +731,46 @@ class GeneticAlgorithm:
         else:
             # Late stage - exploitation
             return "boltzmann"
+
+    def get_hybrid_selection_report(self) -> dict[str, Any] | None:
+        """Get performance report from hybrid selection manager."""
+        if self.hybrid_selection_manager:
+            return self.hybrid_selection_manager.get_performance_report()
+        return None
+
+    def get_selection_recommendations(self, population: list[Idea]) -> dict[str, Any] | None:
+        """Get selection strategy recommendations based on current population."""
+        if self.hybrid_selection_manager:
+            return self.hybrid_selection_manager.get_strategy_recommendations(population)
+        return None
+
+    def set_manual_selection_override(self, strategy: str, generations: int = 1) -> bool:
+        """Set manual override for selection strategy."""
+        if self.hybrid_selection_manager:
+            try:
+                strategy_enum = SelectionStrategy(strategy)
+                self.hybrid_selection_manager.set_manual_override(strategy_enum, generations)
+                return True
+            except ValueError:
+                logger.error(f"Invalid selection strategy: {strategy}")
+                return False
+        return False
+
+    def clear_selection_override(self) -> bool:
+        """Clear manual selection strategy override."""
+        if self.hybrid_selection_manager:
+            self.hybrid_selection_manager.clear_manual_override()
+            return True
+        return False
+
+    def update_selection_strategy_config(self, strategy: str, config_updates: dict[str, Any]) -> bool:
+        """Update configuration for a specific selection strategy."""
+        if self.hybrid_selection_manager:
+            try:
+                strategy_enum = SelectionStrategy(strategy)
+                self.hybrid_selection_manager.update_strategy_config(strategy_enum, config_updates)
+                return True
+            except ValueError:
+                logger.error(f"Invalid selection strategy: {strategy}")
+                return False
+        return False

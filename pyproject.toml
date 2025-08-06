@@ -68,10 +68,14 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 strict_optional = true
-exclude = [".venv/", "venv/"]
+exclude = [".venv/", "venv/", "genetic_mcp/gpu_*.py", "genetic_mcp/server_gpu_enhanced.py"]
 
 [[tool.mypy.overrides]]
 module = ["mcp.*", "fastmcp.*", "sse_starlette.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*", "cupy", "cupy.*", "sentence_transformers", "sentence_transformers.*", "cohere", "voyageai"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

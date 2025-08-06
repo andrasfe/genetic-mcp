@@ -1,6 +1,7 @@
 """Optimization coordinator for advanced genetic algorithm execution."""
 
 import logging
+import random
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -327,10 +328,12 @@ class OptimizationCoordinator:
         """
 
         try:
+            # Lower temperature for refinement with slight variation
+            temperature = round(random.uniform(0.25, 0.4), 2)
             refined = await self.llm_client.generate(
                 refinement_prompt,
-                temperature=0.3,
-                max_tokens=300
+                temperature=temperature,
+                max_tokens=2000
             )
             return refined.strip()
         except Exception as e:

@@ -1,6 +1,7 @@
 """Enhanced fitness evaluation with multi-objective optimization and LLM-based scoring."""
 
 import logging
+import random
 from dataclasses import dataclass
 
 import numpy as np
@@ -216,10 +217,12 @@ class EnhancedFitnessEvaluator:
             eval_prompt = self._create_batch_eval_prompt(batch, target_prompt)
 
             try:
+                # Low temperature with slight variation for consistent but not identical scoring
+                temperature = round(random.uniform(0.25, 0.35), 2)
                 response = await self.llm_client.generate(
                     eval_prompt,
-                    temperature=0.3,  # Low temperature for consistent scoring
-                    max_tokens=1000
+                    temperature=temperature,
+                    max_tokens=2000
                 )
 
                 # Parse and cache scores

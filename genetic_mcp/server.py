@@ -15,6 +15,7 @@ from .llm_client import (
     OpenAIClient,
 )
 from .logging_config import log_error, log_operation, log_performance, setup_logging
+from .memory_system import get_memory_system
 from .models import (
     EvolutionMode,
     FitnessWeights,
@@ -33,7 +34,7 @@ logger = setup_logging(
     component="server"
 )
 # Initialize FastMCP
-mcp = FastMCP("genetic-mcp")
+mcp: FastMCP = FastMCP("genetic-mcp")
 # Tool schemas
 class CreateSessionSchema(BaseModel):
     """Schema for create_session tool."""
@@ -57,9 +58,38 @@ class CreateSessionSchema(BaseModel):
         default=False,
         description="Whether the client generates ideas instead of using LLM workers"
     )
+    adaptive_population: bool = Field(
+        default=False,
+        description="Enable adaptive population size based on diversity and performance metrics"
+    )
+    min_population: int = Field(
+        default=5,
+        ge=2,
+        description="Minimum population size for adaptive adjustment"
+    )
+    max_population: int = Field(
+        default=100,
+        ge=5,
+        description="Maximum population size for adaptive adjustment"
+    )
+    diversity_threshold: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Diversity threshold below which population size is increased"
+    )
+    plateau_generations: int = Field(
+        default=3,
+        ge=1,
+        description="Number of generations without fitness improvement to trigger population increase"
+    )
     optimization_level: str | None = Field(
         default=None,
         description="Optimization level: 'basic', 'enhanced', 'gpu', or 'full'. If not specified, uses server default."
+    )
+    use_memory_system: bool = Field(
+        default=True,
+        description="Whether to use memory system for parameter optimization based on historical performance"
     )
 class RunGenerationSchema(BaseModel):
     """Schema for run_generation tool."""
@@ -132,18 +162,29 @@ async def create_session(
     fitness_weights: dict[str, float] | None = None,
     models: list[str] | None = None,
     client_generated: bool = False,
-    optimization_level: str | None = None
+    adaptive_population: bool = False,
+    min_population: int = 5,
+    max_population: int = 100,
+    diversity_threshold: float = 0.3,
+    plateau_generations: int = 3,
+    optimization_level: str | None = None,
+    use_memory_system: bool = True
 ) -> dict[str, Any]:
     """Create a new idea generation session.
     Args:
         prompt: The prompt to generate ideas for
         mode: Evolution mode - 'single_pass' (rank top-K) or 'iterative' (genetic algorithm)
-        population_size: Number of ideas per generation
+        population_size: Number of ideas per generation (initial size if adaptive_population=True)
         top_k: Number of top ideas to return
         generations: Number of generations (for iterative mode)
         fitness_weights: Weights for fitness calculation (relevance, novelty, feasibility)
         models: List of LLM models to use
         client_generated: Whether the client generates ideas instead of using LLM workers
+        adaptive_population: Enable adaptive population size based on diversity and performance
+        min_population: Minimum population size for adaptive adjustment
+        max_population: Maximum population size for adaptive adjustment
+        diversity_threshold: Diversity threshold below which population size increases
+        plateau_generations: Generations without improvement to trigger population increase
     Returns:
         Session information including session_id
     """
@@ -153,12 +194,23 @@ async def create_session(
                   prompt=prompt[:50] + "..." if len(prompt) > 50 else prompt,
                   mode=mode,
                   population_size=population_size,
-                  client_generated=client_generated)
+                  client_generated=client_generated,
+                  adaptive_population=adaptive_population)
     try:
         # Parse fitness weights
         weights = None
         if fitness_weights:
             weights = FitnessWeights(**fitness_weights)
+        # Create adaptive population config if enabled
+        adaptive_config = None
+        if adaptive_population:
+            adaptive_config = {
+                "min_population": min_population,
+                "max_population": max_population,
+                "diversity_threshold": diversity_threshold,
+                "plateau_generations": plateau_generations
+            }
+
         # Create request
         request = GenerationRequest(
             prompt=prompt,
@@ -168,9 +220,16 @@ async def create_session(
             generations=generations,
             fitness_weights=weights,
             models=models,
-            client_generated=client_generated
+            client_generated=client_generated,
+            adaptive_population=adaptive_population,
+            adaptive_population_config=adaptive_config,
+            use_memory_system=use_memory_system,
+            optimization_level=optimization_level
         )
         # Create session
+        if not session_manager:
+            raise RuntimeError("Session manager not initialized")
+
         client_id = "default"  # In real implementation, extract from context
         # Handle optimization if supported
         if hasattr(session_manager, 'create_session') and callable(getattr(session_manager.create_session, '__func__', None)):
@@ -178,8 +237,8 @@ async def create_session(
             if optimization_level and hasattr(session_manager, 'optimization_config'):
                 # Create session-specific optimization config
                 from .optimization_config import OptimizationConfig
-                session_config = OptimizationConfig(level=optimization_level)
-                session = await session_manager.create_session(client_id, request, optimization_override=session_config)
+                _ = OptimizationConfig(level=optimization_level)  # Validate config
+                session = await session_manager.create_session(client_id, request)  # type: ignore[call-arg]
             else:
                 session = await session_manager.create_session(client_id, request)
         else:
@@ -316,6 +375,8 @@ async def get_session(
                   limit=ideas_limit,
                   offset=ideas_offset)
     try:
+        if not session_manager:
+            raise RuntimeError("Session manager not initialized")
         session = await session_manager.get_session(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
@@ -446,7 +507,7 @@ async def get_optimization_stats() -> dict[str, Any]:
             "optimization_level": os.getenv("GENETIC_MCP_OPTIMIZATION_LEVEL", "basic"),
             "gpu_requested": os.getenv("GENETIC_MCP_USE_GPU", "false").lower() == "true"
         }
-        return stats
+        return dict(stats)
     except Exception as e:
         log_error(logger, "GET_OPTIMIZATION_STATS", e)
         raise
@@ -463,8 +524,10 @@ async def get_optimization_report(session_id: str) -> dict[str, Any]:
     try:
         # Check if using optimized session manager
         if hasattr(session_manager, 'get_optimization_report'):
+            if not session_manager:
+                raise RuntimeError("Session manager not initialized")
             report = await session_manager.get_optimization_report(session_id)
-            return report
+            return dict(report)
         else:
             return {
                 "session_id": session_id,
@@ -494,6 +557,8 @@ async def inject_ideas(
                   idea_count=len(ideas),
                   generation=generation)
     try:
+        if not session_manager:
+            raise RuntimeError("Session manager not initialized")
         session = await session_manager.get_session(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
@@ -649,7 +714,7 @@ async def submit_evaluations(
         return {
             "message": f"Successfully applied {updated_count} evaluations",
             "session_id": session_id,
-            "updated_count": updated_count
+            "updated_count": str(updated_count)
         }
     except Exception as e:
         log_error(logger, "SUBMIT_EVALUATIONS", e, session_id=session_id)
@@ -680,13 +745,88 @@ async def enable_claude_evaluation(
         return {
             "message": "Claude evaluation enabled",
             "session_id": session_id,
-            "evaluation_weight": evaluation_weight,
+            "evaluation_weight": str(evaluation_weight),
             "combined_fitness_formula": f"fitness = {1-evaluation_weight:.1f} * algorithmic + {evaluation_weight:.1f} * claude"
         }
     except Exception as e:
         log_error(logger, "ENABLE_CLAUDE_EVALUATION", e, session_id=session_id)
         raise
-async def initialize_server():
+
+
+# Memory System Tools
+class GetMemoryStatsSchema(BaseModel):
+    """Schema for get_memory_stats tool."""
+    pass
+
+
+class GetCategoryInsightsSchema(BaseModel):
+    """Schema for get_category_insights tool."""
+    category: str = Field(description="Category to get insights for (code_generation, creative_writing, business_ideas, etc.)")
+    days: int = Field(default=30, ge=1, description="Number of days to look back for statistics")
+
+
+@mcp.tool()
+async def get_memory_stats() -> dict[str, Any]:
+    """Get current memory system statistics and status.
+    Returns:
+        Memory system status including stored patterns, operation records, and configuration
+    """
+
+    log_operation(logger, "GET_MEMORY_STATS")
+
+    try:
+        memory_system = get_memory_system()
+        status = memory_system.get_memory_status()
+
+        log_operation(logger, "GET_MEMORY_STATS", status="success",
+                      stored_patterns=status.get("stored_patterns", 0),
+                      enabled=status["enabled"])
+
+        return {
+            "memory_system_status": status,
+            "description": "Memory system maintains a database of successful evolution patterns and provides parameter recommendations based on historical performance."
+        }
+    except Exception as e:
+        log_error(logger, "GET_MEMORY_STATS", e)
+        raise
+
+
+@mcp.tool()
+async def get_category_insights(
+    category: str,
+    days: int = 30
+) -> dict[str, Any]:
+    """Get insights and statistics for a specific prompt category.
+    Args:
+        category: Category to analyze (code_generation, creative_writing, business_ideas, etc.)
+        days: Number of days to look back for statistics
+    Returns:
+        Category insights including statistics and recommendations
+    """
+
+    log_operation(logger, "GET_CATEGORY_INSIGHTS", category=category, days=days)
+
+    try:
+        memory_system = get_memory_system()
+        insights = await memory_system.get_category_insights(category, days)
+
+        if not insights:
+            return {
+                "category": category,
+                "message": "Memory system disabled or no data available",
+                "available_categories": list(memory_system.categorizer.CATEGORIES.keys()) if memory_system.enable_learning else []
+            }
+
+        log_operation(logger, "GET_CATEGORY_INSIGHTS", status="success",
+                      category=category, session_count=insights.get("statistics", {}).get("session_count", 0))
+
+        return insights
+    except Exception as e:
+        log_error(logger, "GET_CATEGORY_INSIGHTS", e, category=category)
+        raise
+
+
+async def initialize_server() -> None:
     """Initialize the server components."""
     global session_manager
     # Initialize LLM client
@@ -707,24 +847,24 @@ async def initialize_server():
         session_manager = SessionManager(llm_client)
         logger.info("Genetic MCP server initialized (standard mode)")
     await session_manager.start()
-async def shutdown_server():
+async def shutdown_server() -> None:
     """Shutdown the server components."""
     global session_manager
     if session_manager:
         await session_manager.stop()
     logger.info("Genetic MCP server shutdown")
-def main():
+def main() -> None:
     """Main entry point."""
     # Determine transport mode
     transport = os.getenv("GENETIC_MCP_TRANSPORT", "stdio").lower()
     if transport == "stdio":
         # Initialize server synchronously before running
-        async def init():
+        async def init() -> None:
             await initialize_server()
         asyncio.run(init())
         # Set up shutdown handler
         import atexit
-        def sync_shutdown():
+        def sync_shutdown() -> None:
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)

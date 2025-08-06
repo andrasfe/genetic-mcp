@@ -154,6 +154,8 @@ Thumbs.db
 .genetic_mcp/
 sessions/
 logs/
+genetic_mcp_memory.db
+*.db
 
 # UV
 uv.lock

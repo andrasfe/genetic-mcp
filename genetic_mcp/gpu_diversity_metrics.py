@@ -117,8 +117,8 @@ class GPUDiversityMetrics:
 
     def _calculate_hypervolume_gpu(
         self,
-        objectives: torch.Tensor,
-        reference_point: torch.Tensor | None = None,
+        objectives: "torch.Tensor",
+        reference_point: "torch.Tensor | None" = None,
         n_samples: int = 10000
     ) -> float:
         """GPU-accelerated hypervolume calculation using Monte Carlo approximation."""
@@ -168,7 +168,7 @@ class GPUDiversityMetrics:
 
     def _calculate_cluster_diversity_gpu(
         self,
-        embeddings: torch.Tensor,
+        embeddings: "torch.Tensor",
         n_clusters: int | None = None
     ) -> dict[str, float]:
         """Calculate diversity metrics based on clustering."""
@@ -221,10 +221,10 @@ class GPUDiversityMetrics:
 
     def _kmeans_gpu(
         self,
-        data: torch.Tensor,
+        data: "torch.Tensor",
         n_clusters: int,
         max_iters: int = 30
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple["torch.Tensor", "torch.Tensor"]:
         """Simple K-means implementation on GPU."""
         data.shape[0]
 
@@ -256,9 +256,9 @@ class GPUDiversityMetrics:
 
     def _kmeans_plusplus_init_gpu(
         self,
-        data: torch.Tensor,
+        data: "torch.Tensor",
         n_clusters: int
-    ) -> torch.Tensor:
+    ) -> "torch.Tensor":
         """K-means++ initialization on GPU."""
         n_points = data.shape[0]
         centroids = []
@@ -286,9 +286,9 @@ class GPUDiversityMetrics:
 
     def _find_unique_solutions_gpu(
         self,
-        embeddings: torch.Tensor,
+        embeddings: "torch.Tensor",
         threshold: float
-    ) -> torch.Tensor:
+    ) -> "torch.Tensor":
         """Find unique solutions based on embedding distance threshold."""
         n_points = embeddings.shape[0]
         unique_mask = torch.ones(n_points, dtype=torch.bool, device=self.device)

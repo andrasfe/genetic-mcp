@@ -6,10 +6,13 @@ import uuid
 from asyncio import TimeoutError
 from datetime import datetime, timedelta
 
+from .adaptive_population import AdaptivePopulationManager, PopulationConfig
+from .diversity_manager import DiversityManager
 from .fitness import FitnessEvaluator
 from .genetic_algorithm import GeneticAlgorithm
 from .llm_client import MultiModelClient
 from .logging_config import log_error, log_operation, log_performance, setup_logging
+from .memory_system import get_memory_system
 from .models import (
     EvolutionMode,
     FitnessWeights,
@@ -71,24 +74,68 @@ class SessionManager:
         if len(client_sessions) >= self.max_sessions_per_client:
             raise ValueError(f"Client {client_id} has reached maximum session limit")
 
-        # Create session
+        # Get memory system for parameter optimization
+        memory_system = get_memory_system()
+        parameter_recommendation = None
+
+        # Get parameter recommendations from memory system if enabled
+        if request.use_memory_system and memory_system.enable_learning:
+            try:
+                parameter_recommendation = await memory_system.get_parameter_recommendation(request.prompt)
+                if parameter_recommendation:
+                    logger.info(f"Memory system provided parameter recommendation with confidence {parameter_recommendation.confidence:.2f}")
+            except Exception as e:
+                logger.warning(f"Failed to get memory recommendation: {e}")
+
+        # Create session ID first
         session_id = str(uuid.uuid4())
+
+        # Use parameters from request, recommendation, or defaults (in that order)
+        if request.parameters:
+            parameters = request.parameters
+        elif parameter_recommendation and parameter_recommendation.confidence > 0.7:
+            parameters = parameter_recommendation.parameters
+            logger.info(f"Using memory-recommended parameters for session {session_id}")
+        else:
+            parameters = GeneticParameters(
+                population_size=request.population_size,
+                generations=request.generations
+            )
+
+        # Use fitness weights from request, recommendation, or defaults
+        if request.fitness_weights:
+            fitness_weights = request.fitness_weights
+        elif parameter_recommendation and parameter_recommendation.confidence > 0.7:
+            fitness_weights = parameter_recommendation.fitness_weights
+            logger.info(f"Using memory-recommended fitness weights for session {session_id}")
+        else:
+            fitness_weights = FitnessWeights()
         session = Session(
             id=session_id,
             client_id=client_id,
             prompt=request.prompt,
             mode=request.mode,
             client_generated=request.client_generated,
-            parameters=request.parameters or GeneticParameters(
-                population_size=request.population_size,
-                generations=request.generations
-            ),
-            fitness_weights=request.fitness_weights or FitnessWeights()
+            parameters=parameters,
+            fitness_weights=fitness_weights,
+            adaptive_population_enabled=request.adaptive_population,
+            adaptive_population_config=request.adaptive_population_config or {},
+            memory_enabled=request.use_memory_system,
+            parameter_recommendation=parameter_recommendation.model_dump() if parameter_recommendation else {}
         )
 
         # Initialize session components
         session._fitness_evaluator = FitnessEvaluator(session.fitness_weights)
         session._genetic_algorithm = GeneticAlgorithm(session.parameters)
+
+        # Initialize diversity manager (needed for adaptive population)
+        session._diversity_manager = DiversityManager()
+
+        # Initialize adaptive population manager if enabled
+        if session.adaptive_population_enabled:
+            population_config = PopulationConfig(**session.adaptive_population_config)
+            session._adaptive_population_manager = AdaptivePopulationManager(population_config)
+            logger.info(f"Initialized adaptive population manager for session {session_id}")
 
         # Only initialize worker pool if not client-generated
         if not session.client_generated:
@@ -234,6 +281,28 @@ class SessionManager:
                         f"Running generation {generation}/{session.parameters.generations}..."
                     )
 
+                    # Calculate diversity metrics if adaptive population is enabled
+                    diversity_metrics = None
+                    if session.adaptive_population_enabled and hasattr(session, '_diversity_manager'):
+                        # Get embeddings for diversity calculation
+                        embeddings = {
+                            idea.id: session._fitness_evaluator.embeddings_cache.get(idea.id)
+                            for idea in current_population
+                            if idea.id in session._fitness_evaluator.embeddings_cache
+                        }
+                        diversity_metrics = session._diversity_manager.calculate_diversity_metrics(
+                            current_population, embeddings
+                        )
+                        logger.debug(f"Generation {generation} diversity metrics: {diversity_metrics}")
+
+                    # Adjust population size if adaptive population is enabled
+                    if session.adaptive_population_enabled:
+                        recommended_size = session.get_recommended_population_size(diversity_metrics)
+                        if recommended_size != session.parameters.population_size:
+                            old_size = session.parameters.population_size
+                            session.update_population_size_dynamically(recommended_size)
+                            logger.info(f"Adaptive population: adjusted from {old_size} to {recommended_size} for generation {generation}")
+
                     # Get selection probabilities
                     probabilities = session._fitness_evaluator.get_selection_probabilities(
                         current_population
@@ -303,6 +372,15 @@ class SessionManager:
 
             # Calculate execution time
             execution_time = (datetime.utcnow() - start_time).total_seconds()
+            session.execution_time_seconds = execution_time
+
+            # Store session results in memory system for learning
+            if session.memory_enabled:
+                try:
+                    memory_system = get_memory_system()
+                    await memory_system.store_session_results(session)
+                except Exception as e:
+                    logger.warning(f"Failed to store session results in memory system: {e}")
 
             # Create result
             result = GenerationResult(

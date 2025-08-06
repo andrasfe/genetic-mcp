@@ -249,9 +249,9 @@ class GPUOptimizedSelection:
 
     def _calculate_front_crowding_gpu(
         self,
-        objectives: torch.Tensor,
-        indices: torch.Tensor
-    ) -> torch.Tensor:
+        objectives: "torch.Tensor",
+        indices: "torch.Tensor"
+    ) -> "torch.Tensor":
         """Calculate crowding distance for a single front on GPU."""
         n, m = objectives.shape
         distances = torch.zeros(n, device=self.device)

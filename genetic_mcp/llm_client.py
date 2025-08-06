@@ -15,7 +15,7 @@ class LLMClient(ABC):
 
     @abstractmethod
     async def generate(self, prompt: str, system_prompt: str | None = None,
-                      temperature: float = 0.7, max_tokens: int = 1000) -> str:
+                      temperature: float = 0.7, max_tokens: int = 2000) -> str:
         """Generate a response from the LLM."""
         pass
 
@@ -34,7 +34,7 @@ class OpenAIClient(LLMClient):
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")
 
     async def generate(self, prompt: str, system_prompt: str | None = None,
-                      temperature: float = 0.7, max_tokens: int = 1000) -> str:
+                      temperature: float = 0.7, max_tokens: int = 2000) -> str:
         """Generate a response using OpenAI API."""
         messages = []
         if system_prompt:
@@ -82,7 +82,7 @@ class AnthropicClient(LLMClient):
         self._openai_client = AsyncOpenAI(api_key=openai_api_key)
 
     async def generate(self, prompt: str, system_prompt: str | None = None,
-                      temperature: float = 0.7, max_tokens: int = 1000) -> str:
+                      temperature: float = 0.7, max_tokens: int = 2000) -> str:
         """Generate a response using Anthropic API."""
         try:
             messages = [{"role": "user", "content": prompt}]
@@ -136,7 +136,7 @@ class OpenRouterClient(LLMClient):
         self._openai_client = AsyncOpenAI(api_key=openai_api_key)
 
     async def generate(self, prompt: str, system_prompt: str | None = None,
-                      temperature: float = 0.7, max_tokens: int = 1000) -> str:
+                      temperature: float = 0.7, max_tokens: int = 2000) -> str:
         """Generate a response using OpenRouter API."""
         messages = []
         if system_prompt:

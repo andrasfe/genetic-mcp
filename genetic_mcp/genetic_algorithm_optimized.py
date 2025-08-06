@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .advanced_crossover import AdvancedCrossoverManager, CrossoverOperator
+from .intelligent_mutation import IntelligentMutationManager
 from .llm_client import LLMClient
 from .models import GeneticParameters, Idea
 
@@ -42,7 +44,12 @@ class OptimizedGeneticAlgorithm:
     def __init__(
         self,
         parameters: GeneticParameters = None,
-        llm_client: LLMClient | None = None
+        llm_client: LLMClient | None = None,
+        advanced_crossover_enabled: bool = False,
+        crossover_strategy: str = None,
+        crossover_config: dict = None,
+        intelligent_mutation_enabled: bool = False,
+        target_embedding: list[float] | None = None
     ):
         self.parameters = parameters or GeneticParameters()
         self.llm_client = llm_client
@@ -52,6 +59,25 @@ class OptimizedGeneticAlgorithm:
         self.adaptive_mutation_rate = self.parameters.mutation_rate
         self.adaptive_crossover_rate = self.parameters.crossover_rate
         self.temperature = 1.0  # For Boltzmann selection
+
+        # Advanced crossover setup
+        self.advanced_crossover_enabled = advanced_crossover_enabled
+        self.crossover_strategy = crossover_strategy
+        self.crossover_config = crossover_config or {}
+
+        if self.advanced_crossover_enabled:
+            self.crossover_manager = AdvancedCrossoverManager(llm_client=llm_client)
+        else:
+            self.crossover_manager = None
+
+        # Intelligent mutation setup
+        self.intelligent_mutation_enabled = intelligent_mutation_enabled
+        self.target_embedding = target_embedding
+
+        if self.intelligent_mutation_enabled:
+            self.mutation_manager = IntelligentMutationManager(llm_client=llm_client)
+        else:
+            self.mutation_manager = None
 
     async def select_parents_advanced(
         self,
@@ -152,6 +178,38 @@ class OptimizedGeneticAlgorithm:
         indices = np.random.choice(n, size=2, replace=False, p=probabilities)
         return sorted_pop[indices[0]], sorted_pop[indices[1]]
 
+    async def advanced_crossover(
+        self,
+        parent1: Idea,
+        parent2: Idea,
+        generation: int = 0
+    ) -> tuple[str, str]:
+        """Advanced crossover using the crossover manager."""
+        if self.advanced_crossover_enabled and self.crossover_manager:
+            # Use advanced crossover manager
+            try:
+                if self.crossover_strategy:
+                    # Use specified strategy
+                    operator = CrossoverOperator(self.crossover_strategy)
+                else:
+                    # Use adaptive selection
+                    operator = CrossoverOperator.ADAPTIVE
+
+                offspring1, offspring2 = await self.crossover_manager.crossover(
+                    parent1, parent2, operator, generation, **self.crossover_config
+                )
+
+                return offspring1, offspring2
+
+            except Exception as e:
+                logger.error(f"Advanced crossover failed: {e}")
+                # Fallback to semantic crossover
+                return await self.semantic_crossover(parent1, parent2)
+
+        else:
+            # Use traditional semantic crossover
+            return await self.semantic_crossover(parent1, parent2)
+
     async def semantic_crossover(
         self,
         parent1: Idea,
@@ -179,10 +237,12 @@ class OptimizedGeneticAlgorithm:
         """
 
         try:
+            # Random temperature between 0.6 and 0.8 for crossover
+            temperature = round(random.uniform(0.6, 0.8), 2)
             response = await self.llm_client.generate(
                 crossover_prompt,
-                temperature=0.7,
-                max_tokens=500
+                temperature=temperature,
+                max_tokens=2000
             )
 
             # Parse response
@@ -222,8 +282,44 @@ class OptimizedGeneticAlgorithm:
 
         return offspring1, offspring2
 
-    async def adaptive_mutation(self, content: str, generation: int) -> str:
-        """Adaptive mutation with multiple operators."""
+    async def adaptive_mutation(self, content: str, generation: int, idea: Idea | None = None, all_ideas: list[Idea] | None = None) -> str:
+        """Adaptive mutation with intelligent strategies when enabled."""
+        # Use intelligent mutation if enabled and idea is provided
+        if self.intelligent_mutation_enabled and self.mutation_manager and idea:
+            return await self.intelligent_mutation(idea, all_ideas or [], generation)
+
+        # Fallback to original adaptive mutation
+        return await self._legacy_adaptive_mutation(content, generation)
+
+    async def intelligent_mutation(self, idea: Idea, all_ideas: list[Idea], generation: int) -> str:
+        """Apply intelligent mutation using the mutation manager."""
+        if not self.mutation_manager:
+            return await self._legacy_adaptive_mutation(idea.content, generation)
+
+        # Adapt mutation rate based on metrics
+        self._update_adaptive_rates()
+
+        if random.random() > self.adaptive_mutation_rate:
+            return idea.content
+
+        try:
+            mutated_content = await self.mutation_manager.mutate(
+                idea=idea,
+                all_ideas=all_ideas,
+                generation=generation,
+                target_embedding=self.target_embedding
+            )
+
+            logger.debug(f"Intelligent mutation applied to idea {idea.id} in generation {generation}")
+            return mutated_content
+
+        except Exception as e:
+            logger.error(f"Intelligent mutation failed for idea {idea.id}: {e}")
+            # Fallback to legacy mutation
+            return await self._legacy_adaptive_mutation(idea.content, generation)
+
+    async def _legacy_adaptive_mutation(self, content: str, generation: int) -> str:
+        """Legacy adaptive mutation with multiple operators."""
         # Adapt mutation rate based on metrics
         self._update_adaptive_rates()
 
@@ -257,10 +353,18 @@ class OptimizedGeneticAlgorithm:
         }
 
         try:
+            # Variable temperature based on operator with random variation
+            if operator == "creative":
+                temperature = round(random.uniform(0.75, 0.9), 2)  # Higher for creativity
+            elif operator == "disruptive":
+                temperature = round(random.uniform(0.8, 0.95), 2)  # Even higher for disruption
+            else:
+                temperature = round(random.uniform(0.55, 0.7), 2)  # Lower for refinement
+
             response = await self.llm_client.generate(
                 prompts.get(operator, prompts["semantic"]),
-                temperature=0.8 if operator == "creative" else 0.6,
-                max_tokens=200
+                temperature=temperature,
+                max_tokens=2000
             )
             return response.strip()
         except Exception as e:
@@ -365,36 +469,76 @@ class OptimizedGeneticAlgorithm:
             # Select parents with chosen method
             parent1, parent2 = await self.select_parents_advanced(population, selection_method)
 
-            # Semantic crossover
-            offspring1_content, offspring2_content = await self.semantic_crossover(parent1, parent2)
+            # Advanced crossover (falls back to semantic if not enabled)
+            crossover_result = await self.advanced_crossover(parent1, parent2, generation)
+            if isinstance(crossover_result, tuple) and len(crossover_result) == 3:
+                # Extended result with operator info
+                offspring1_content, offspring2_content, crossover_operator = crossover_result
+            else:
+                # Standard result
+                offspring1_content, offspring2_content = crossover_result
+                crossover_operator = "semantic"  # Default
 
-            # Adaptive mutation
-            offspring1_content = await self.adaptive_mutation(offspring1_content, generation)
-            offspring2_content = await self.adaptive_mutation(offspring2_content, generation)
-
-            # Create offspring
+            # Create initial offspring ideas for mutation
             offspring1 = Idea(
                 id=f"gen{generation}_offspring{offspring_count}",
                 content=offspring1_content,
                 generation=generation,
                 parent_ids=[parent1.id, parent2.id],
-                metadata={"selection_method": selection_method}
+                fitness=0.0,  # Will be evaluated later
+                metadata={
+                    "selection_method": selection_method,
+                    "crossover_operator": crossover_operator
+                }
             )
+
+            offspring2 = Idea(
+                id=f"gen{generation}_offspring{offspring_count + 1}",
+                content=offspring2_content,
+                generation=generation,
+                parent_ids=[parent1.id, parent2.id],
+                fitness=0.0,  # Will be evaluated later
+                metadata={
+                    "selection_method": selection_method,
+                    "crossover_operator": crossover_operator
+                }
+            )
+
+            # Apply intelligent or adaptive mutation
+            offspring1.content = await self.adaptive_mutation(
+                offspring1_content, generation, offspring1, population
+            )
+
+            if len(new_population) + 1 < self.parameters.population_size:
+                offspring2.content = await self.adaptive_mutation(
+                    offspring2_content, generation, offspring2, population
+                )
+
             new_population.append(offspring1)
             offspring_count += 1
 
             if len(new_population) < self.parameters.population_size:
-                offspring2 = Idea(
-                    id=f"gen{generation}_offspring{offspring_count}",
-                    content=offspring2_content,
-                    generation=generation,
-                    parent_ids=[parent1.id, parent2.id],
-                    metadata={"selection_method": selection_method}
-                )
                 new_population.append(offspring2)
                 offspring_count += 1
 
         return new_population[:self.parameters.population_size]
+
+    def record_crossover_performance(self, parent1: Idea, parent2: Idea, offspring: Idea):
+        """Record crossover performance for adaptive improvement."""
+        if self.advanced_crossover_enabled and self.crossover_manager:
+            # Extract crossover operator used (if stored in metadata)
+            operator = offspring.metadata.get('crossover_operator', 'unknown')
+            if operator != 'unknown':
+                (parent1.fitness + parent2.fitness) / 2
+                self.crossover_manager.record_fitness_improvement(
+                    operator, parent1.fitness, parent2.fitness, offspring.fitness
+                )
+
+    def get_crossover_performance_report(self) -> dict:
+        """Get performance report for crossover operators."""
+        if self.advanced_crossover_enabled and self.crossover_manager:
+            return self.crossover_manager.get_performance_report()
+        return {"message": "Advanced crossover not enabled"}
 
     def _adaptive_elitism_count(self, population: list[Idea]) -> int:
         """Adaptively determine elitism count."""
@@ -409,6 +553,30 @@ class OptimizedGeneticAlgorithm:
             return max(1, base_elite - 1)
 
         return base_elite
+
+    def update_mutation_feedback(self, population: list[Idea]) -> None:
+        """Update mutation manager with fitness feedback for learning."""
+        if not self.intelligent_mutation_enabled or not self.mutation_manager:
+            return
+
+        for idea in population:
+            self.mutation_manager.update_mutation_feedback(idea.id, idea.fitness)
+
+    def get_mutation_performance_report(self) -> dict:
+        """Get mutation performance report from intelligent mutation manager."""
+        if not self.intelligent_mutation_enabled or not self.mutation_manager:
+            return {"message": "Intelligent mutation not enabled"}
+
+        return self.mutation_manager.get_performance_report()
+
+    def reset_mutation_adaptation(self) -> None:
+        """Reset mutation adaptation for new session."""
+        if self.intelligent_mutation_enabled and self.mutation_manager:
+            self.mutation_manager.reset_adaptation()
+
+    def set_target_embedding(self, embedding: list[float]) -> None:
+        """Set target embedding for guided mutations."""
+        self.target_embedding = embedding
 
     def check_convergence(self, population: list[Idea], threshold: float = 0.01) -> bool:
         """Check if population has converged."""

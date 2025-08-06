@@ -1,6 +1,7 @@
 """Worker pool management for parallel LLM processing."""
 
 import asyncio
+import random
 import time
 import uuid
 from typing import Any
@@ -23,6 +24,9 @@ class WorkerPool:
         self.result_queue: asyncio.Queue = asyncio.Queue()
         self._running = False
         self._worker_tasks: list[asyncio.Task] = []
+        # Temperature range for random variation (0.6 to 0.95)
+        self.temp_min = 0.6
+        self.temp_max = 0.95
 
     async def start(self) -> None:
         """Start the worker pool."""
@@ -89,6 +93,14 @@ class WorkerPool:
         except asyncio.TimeoutError:
             return None
 
+    def get_random_temperature(self) -> float:
+        """Get a random temperature within reasonable bounds.
+
+        Returns a temperature between temp_min and temp_max with 2 decimal precision.
+        Default range is 0.6 to 0.95 for balanced creativity without excessive randomness.
+        """
+        return round(random.uniform(self.temp_min, self.temp_max), 2)
+
     async def _worker_loop(self, worker: Worker) -> None:
         """Main loop for a worker."""
         while self._running:
@@ -105,12 +117,16 @@ class WorkerPool:
 
                 # Generate idea
                 try:
+                    # Get random temperature for this generation
+                    temperature = self.get_random_temperature()
+                    logger.debug(f"Using temperature {temperature} for task {task['id']}")
+
                     content = await self.llm_client.generate(
                         prompt=task["prompt"],
                         client_name=worker.model,
                         system_prompt=task["system_prompt"],
-                        temperature=0.8,
-                        max_tokens=1500
+                        temperature=temperature,
+                        max_tokens=2000
                     )
 
                     # Create idea
@@ -120,6 +136,7 @@ class WorkerPool:
                         metadata={
                             "worker_id": worker.id,
                             "model": worker.model,
+                            "temperature": temperature,  # Track temperature used
                             **task["metadata"]
                         }
                     )
