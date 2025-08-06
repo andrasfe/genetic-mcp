@@ -128,9 +128,14 @@ def initialize_llm_client() -> MultiModelClient:
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     # Get model configurations from environment
-    openai_model = os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
-    anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-3-opus-20240229")
-    openrouter_model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.2-3b-instruct")
+    # First check for MODEL env var, then fall back to provider-specific vars
+    default_model = os.getenv("MODEL")
+    if not default_model:
+        raise ValueError("MODEL environment variable must be set in .env file")
+    
+    openai_model = os.getenv("OPENAI_MODEL", default_model if "gpt" in default_model else default_model)
+    anthropic_model = os.getenv("ANTHROPIC_MODEL", default_model if "claude" in default_model else default_model)
+    openrouter_model = os.getenv("OPENROUTER_MODEL", default_model)
     if not openai_key and not anthropic_key and not openrouter_key:
         raise ValueError("At least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY must be set")
     # Add available clients
@@ -823,6 +828,255 @@ async def get_category_insights(
         return insights
     except Exception as e:
         log_error(logger, "GET_CATEGORY_INSIGHTS", e, category=category)
+        raise
+
+
+# Persistence tools
+class SaveSessionSchema(BaseModel):
+    """Schema for save_session tool."""
+    session_id: str = Field(description="The session ID to save")
+    checkpoint_name: str | None = Field(
+        default=None, 
+        description="Optional checkpoint name for this save operation"
+    )
+
+
+class LoadSessionSchema(BaseModel):
+    """Schema for load_session tool."""
+    session_id: str = Field(description="The session ID to load")
+
+
+class ResumeSessionSchema(BaseModel):
+    """Schema for resume_session tool."""
+    session_id: str = Field(description="The session ID to resume")
+
+
+class ListSavedSessionsSchema(BaseModel):
+    """Schema for list_saved_sessions tool."""
+    client_id: str | None = Field(
+        default=None, 
+        description="Optional client ID to filter sessions"
+    )
+    limit: int = Field(
+        default=50, 
+        ge=1, 
+        le=200, 
+        description="Maximum number of sessions to return"
+    )
+    offset: int = Field(
+        default=0, 
+        ge=0, 
+        description="Number of sessions to skip for pagination"
+    )
+
+
+@mcp.tool()
+async def save_session(session_id: str, checkpoint_name: str | None = None) -> dict[str, Any]:
+    """Save a session to the database.
+    
+    Args:
+        session_id: The session ID to save
+        checkpoint_name: Optional checkpoint name for this save operation
+        
+    Returns:
+        Save operation result
+    """
+    global session_manager
+    start_time = time.time()
+    
+    log_operation(logger, "SAVE_SESSION", 
+                  session_id=session_id, 
+                  checkpoint_name=checkpoint_name)
+    
+    try:
+        if not session_manager:
+            raise RuntimeError("Session manager not initialized")
+            
+        success = await session_manager.save_session_to_db(session_id, checkpoint_name)
+        
+        if success:
+            result = {
+                "success": True,
+                "session_id": session_id,
+                "checkpoint_name": checkpoint_name,
+                "message": f"Session {session_id} saved successfully"
+            }
+        else:
+            result = {
+                "success": False,
+                "session_id": session_id,
+                "message": f"Session {session_id} not found or failed to save"
+            }
+            
+        log_performance(logger, "SAVE_SESSION", time.time() - start_time,
+                       session_id=session_id, success=success)
+        
+        return result
+        
+    except Exception as e:
+        log_error(logger, "SAVE_SESSION", e, session_id=session_id)
+        raise
+
+
+@mcp.tool()
+async def load_session(session_id: str) -> dict[str, Any]:
+    """Load a session from the database.
+    
+    Args:
+        session_id: The session ID to load
+        
+    Returns:
+        Load operation result and session information
+    """
+    global session_manager
+    start_time = time.time()
+    
+    log_operation(logger, "LOAD_SESSION", session_id=session_id)
+    
+    try:
+        if not session_manager:
+            raise RuntimeError("Session manager not initialized")
+            
+        session = await session_manager.load_session_from_db(session_id)
+        
+        if session:
+            result = {
+                "success": True,
+                "session_id": session_id,
+                "session": {
+                    "id": session.id,
+                    "client_id": session.client_id,
+                    "prompt": session.prompt,
+                    "mode": session.mode.value,
+                    "status": session.status,
+                    "current_generation": session.current_generation,
+                    "total_ideas": len(session.ideas),
+                    "created_at": session.created_at.isoformat(),
+                    "updated_at": session.updated_at.isoformat(),
+                    "parameters": {
+                        "population_size": session.parameters.population_size,
+                        "generations": session.parameters.generations,
+                        "mutation_rate": session.parameters.mutation_rate,
+                        "crossover_rate": session.parameters.crossover_rate,
+                        "elitism_count": session.parameters.elitism_count
+                    },
+                    "fitness_weights": {
+                        "relevance": session.fitness_weights.relevance,
+                        "novelty": session.fitness_weights.novelty,
+                        "feasibility": session.fitness_weights.feasibility
+                    }
+                },
+                "message": f"Session {session_id} loaded successfully"
+            }
+        else:
+            result = {
+                "success": False,
+                "session_id": session_id,
+                "message": f"Session {session_id} not found in database"
+            }
+            
+        log_performance(logger, "LOAD_SESSION", time.time() - start_time,
+                       session_id=session_id, success=session is not None)
+        
+        return result
+        
+    except Exception as e:
+        log_error(logger, "LOAD_SESSION", e, session_id=session_id)
+        raise
+
+
+@mcp.tool()
+async def resume_session(session_id: str) -> dict[str, Any]:
+    """Resume a session from the database.
+    
+    Args:
+        session_id: The session ID to resume
+        
+    Returns:
+        Resume operation result
+    """
+    global session_manager
+    start_time = time.time()
+    
+    log_operation(logger, "RESUME_SESSION", session_id=session_id)
+    
+    try:
+        if not session_manager:
+            raise RuntimeError("Session manager not initialized")
+            
+        success = await session_manager.resume_session(session_id)
+        
+        if success:
+            session = await session_manager.get_session(session_id)
+            result = {
+                "success": True,
+                "session_id": session_id,
+                "status": session.status if session else "unknown",
+                "message": f"Session {session_id} resumed successfully"
+            }
+        else:
+            result = {
+                "success": False,
+                "session_id": session_id,
+                "message": f"Failed to resume session {session_id}"
+            }
+            
+        log_performance(logger, "RESUME_SESSION", time.time() - start_time,
+                       session_id=session_id, success=success)
+        
+        return result
+        
+    except Exception as e:
+        log_error(logger, "RESUME_SESSION", e, session_id=session_id)
+        raise
+
+
+@mcp.tool()
+async def list_saved_sessions(
+    client_id: str | None = None, 
+    limit: int = 50, 
+    offset: int = 0
+) -> dict[str, Any]:
+    """List saved sessions from the database.
+    
+    Args:
+        client_id: Optional client ID to filter sessions
+        limit: Maximum number of sessions to return
+        offset: Number of sessions to skip for pagination
+        
+    Returns:
+        List of saved sessions with metadata
+    """
+    global session_manager
+    start_time = time.time()
+    
+    log_operation(logger, "LIST_SAVED_SESSIONS", 
+                  client_id=client_id, 
+                  limit=limit, 
+                  offset=offset)
+    
+    try:
+        if not session_manager:
+            raise RuntimeError("Session manager not initialized")
+            
+        sessions = await session_manager.list_saved_sessions(client_id, limit, offset)
+        
+        result = {
+            "success": True,
+            "sessions": sessions,
+            "count": len(sessions),
+            "limit": limit,
+            "offset": offset,
+            "client_id": client_id
+        }
+        
+        log_performance(logger, "LIST_SAVED_SESSIONS", time.time() - start_time,
+                       count=len(sessions), client_id=client_id)
+        
+        return result
+        
+    except Exception as e:
+        log_error(logger, "LIST_SAVED_SESSIONS", e, client_id=client_id)
         raise
 
 

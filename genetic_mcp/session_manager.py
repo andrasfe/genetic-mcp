@@ -5,6 +5,7 @@ import time
 import uuid
 from asyncio import TimeoutError
 from datetime import datetime, timedelta
+from typing import Optional
 
 from .adaptive_population import AdaptivePopulationManager, PopulationConfig
 from .diversity_manager import DiversityManager
@@ -23,6 +24,7 @@ from .models import (
     Idea,
     Session,
 )
+from .persistence_manager import PersistenceManager
 from .worker_pool import IdeaGenerator, WorkerPool
 
 logger = setup_logging(component="session_manager")
@@ -33,24 +35,51 @@ class SessionManager:
 
     def __init__(self, llm_client: MultiModelClient,
                  max_sessions_per_client: int = 10,
-                 session_timeout_minutes: int = 60):
+                 session_timeout_minutes: int = 60,
+                 persistence_db_path: str = "genetic_mcp_sessions.db",
+                 enable_auto_save: bool = True):
         self.llm_client = llm_client
         self.max_sessions_per_client = max_sessions_per_client
         self.session_timeout = timedelta(minutes=session_timeout_minutes)
         self.sessions: dict[str, Session] = {}
         self.client_sessions: dict[str, list[str]] = {}
         self._cleanup_task: asyncio.Task | None = None
+        
+        # Persistence configuration
+        self.persistence_manager = PersistenceManager(persistence_db_path)
+        self.enable_auto_save = enable_auto_save
+        self._auto_save_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start the session manager."""
+        # Initialize persistence manager
+        await self.persistence_manager.initialize()
+        
+        # Start cleanup and auto-save tasks
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-        logger.info("Session manager started")
+        if self.enable_auto_save:
+            self._auto_save_task = asyncio.create_task(self._auto_save_loop())
+        
+        logger.info("Session manager started with persistence enabled")
 
     async def stop(self) -> None:
         """Stop the session manager."""
+        # Cancel background tasks
+        tasks_to_cancel = []
         if self._cleanup_task:
-            self._cleanup_task.cancel()
-            await asyncio.gather(self._cleanup_task, return_exceptions=True)
+            tasks_to_cancel.append(self._cleanup_task)
+        if self._auto_save_task:
+            tasks_to_cancel.append(self._auto_save_task)
+            
+        for task in tasks_to_cancel:
+            task.cancel()
+            
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        # Save all active sessions before shutdown
+        if self.enable_auto_save:
+            await self._save_all_sessions()
 
         # Stop all active sessions
         for session in self.sessions.values():
@@ -361,6 +390,18 @@ class SessionManager:
                     session.ideas.extend(new_population)
                     current_population = new_population
 
+                    # Save checkpoint every few generations
+                    if self.enable_auto_save and generation % 3 == 0:
+                        try:
+                            await self.persistence_manager.save_checkpoint(
+                                session, 
+                                f"generation_{generation}",
+                                {"population_size": len(current_population), "best_fitness": max(idea.fitness for idea in current_population) if current_population else 0.0}
+                            )
+                            logger.debug(f"Saved checkpoint for session {session.id} at generation {generation}")
+                        except Exception as e:
+                            logger.warning(f"Failed to save checkpoint for session {session.id}: {e}")
+
                 # Get top ideas from final population
                 top_ideas = session.get_top_ideas(top_k)
 
@@ -393,6 +434,14 @@ class SessionManager:
             )
 
             session.status = "completed"
+
+            # Auto-save completed session
+            if self.enable_auto_save:
+                try:
+                    await self.persistence_manager.save_session(session, "generation_completed")
+                    logger.debug(f"Auto-saved completed session {session.id}")
+                except Exception as e:
+                    logger.warning(f"Failed to auto-save completed session {session.id}: {e}")
 
             log_performance(logger, "RUN_GENERATION", time.time() - perf_start,
                            session_id=session.id,
@@ -488,3 +537,151 @@ class SessionManager:
                 break
             except Exception as e:
                 logger.error(f"Error in cleanup loop: {e}")
+
+    async def _auto_save_loop(self) -> None:
+        """Periodically auto-save active sessions."""
+        while True:
+            try:
+                await asyncio.sleep(180)  # Auto-save every 3 minutes
+                await self._save_all_sessions()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in auto-save loop: {e}")
+
+    async def _save_all_sessions(self) -> None:
+        """Save all active sessions to database."""
+        if not self.sessions:
+            return
+
+        saved_count = 0
+        for session_id, session in self.sessions.items():
+            try:
+                # Only save active or recently completed sessions
+                if session.status in ["active", "completed"]:
+                    await self.persistence_manager.save_session(session)
+                    saved_count += 1
+            except Exception as e:
+                logger.error(f"Failed to auto-save session {session_id}: {e}")
+
+        if saved_count > 0:
+            logger.debug(f"Auto-saved {saved_count} sessions")
+
+    # Persistence methods
+    async def save_session_to_db(self, session_id: str, checkpoint_name: Optional[str] = None) -> bool:
+        """Save a session to the database."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return False
+
+        try:
+            await self.persistence_manager.save_session(session, checkpoint_name)
+            logger.info(f"Successfully saved session {session_id} to database")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save session {session_id}: {e}")
+            return False
+
+    async def load_session_from_db(self, session_id: str) -> Optional[Session]:
+        """Load a session from the database."""
+        try:
+            session = await self.persistence_manager.load_session(session_id)
+            if session:
+                # Reconstruct session components
+                await self._reconstruct_session_components(session)
+                
+                # Add to active sessions
+                self.sessions[session_id] = session
+                if session.client_id not in self.client_sessions:
+                    self.client_sessions[session.client_id] = []
+                if session_id not in self.client_sessions[session.client_id]:
+                    self.client_sessions[session.client_id].append(session_id)
+                
+                logger.info(f"Successfully loaded session {session_id} from database")
+                return session
+            else:
+                logger.warning(f"Session {session_id} not found in database")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to load session {session_id}: {e}")
+            return None
+
+    async def resume_session(self, session_id: str) -> bool:
+        """Resume a session from the database."""
+        session = await self.load_session_from_db(session_id)
+        if not session:
+            return False
+
+        try:
+            # Update status to active if it was completed/failed
+            if session.status in ["completed", "failed", "paused"]:
+                session.status = "active"
+                session.updated_at = datetime.utcnow()
+
+            # Start worker pool if not client-generated and not already started
+            if not session.client_generated and not hasattr(session, '_worker_pool'):
+                session._worker_pool = WorkerPool(self.llm_client, max_workers=20)
+                session._idea_generator = IdeaGenerator(session._worker_pool, self.llm_client)
+                await session._worker_pool.start()
+
+            logger.info(f"Successfully resumed session {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to resume session {session_id}: {e}")
+            return False
+
+    async def list_saved_sessions(self, client_id: Optional[str] = None, limit: int = 50, offset: int = 0):
+        """List saved sessions from the database."""
+        try:
+            return await self.persistence_manager.list_saved_sessions(client_id, limit, offset)
+        except Exception as e:
+            logger.error(f"Failed to list saved sessions: {e}")
+            return []
+
+    async def save_checkpoint(self, session_id: str, checkpoint_name: str, additional_data: Optional[dict] = None) -> bool:
+        """Save a checkpoint for a session."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return False
+
+        try:
+            await self.persistence_manager.save_checkpoint(session, checkpoint_name, additional_data)
+            logger.info(f"Saved checkpoint '{checkpoint_name}' for session {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint for session {session_id}: {e}")
+            return False
+
+    async def _reconstruct_session_components(self, session: Session) -> None:
+        """Reconstruct session components after loading from database."""
+        try:
+            # Initialize fitness evaluator
+            session._fitness_evaluator = FitnessEvaluator(session.fitness_weights)
+
+            # Initialize genetic algorithm
+            session._genetic_algorithm = GeneticAlgorithm(session.parameters)
+
+            # Initialize diversity manager
+            session._diversity_manager = DiversityManager()
+
+            # Initialize adaptive population manager if enabled
+            if session.adaptive_population_enabled:
+                population_config = PopulationConfig(**session.adaptive_population_config)
+                session._adaptive_population_manager = AdaptivePopulationManager(population_config)
+
+            # Pre-compute embeddings for existing ideas if fitness evaluator needs them
+            if session.ideas and hasattr(session._fitness_evaluator, 'embeddings_cache'):
+                for idea in session.ideas:
+                    if idea.content:
+                        try:
+                            # Generate embedding for idea content
+                            embedding = await self.llm_client.embed(idea.content)
+                            session._fitness_evaluator.add_embedding(idea.id, embedding)
+                        except Exception as e:
+                            logger.warning(f"Failed to generate embedding for idea {idea.id}: {e}")
+
+            logger.debug(f"Reconstructed components for session {session.id}")
+
+        except Exception as e:
+            logger.error(f"Failed to reconstruct session components for {session.id}: {e}")
+            raise
