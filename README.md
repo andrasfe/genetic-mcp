@@ -4,6 +4,7 @@ A Model Context Protocol (MCP) server implementing genetic algorithm-based idea 
 
 ## Features
 
+### Core Capabilities
 - **Parallel LLM Workers**: Concurrent idea generation with configurable worker pools
 - **Multi-Objective Fitness**: Evaluate ideas on relevance, novelty, and feasibility
 - **Genetic Operations**: Selection, crossover, mutation, and elitism strategies
@@ -12,9 +13,18 @@ A Model Context Protocol (MCP) server implementing genetic algorithm-based idea 
 - **Multi-Model Support**: OpenAI, Anthropic, and OpenRouter LLM integrations
 - **Progress Streaming**: Real-time updates for long-running operations
 - **Lineage Tracking**: Complete evolution history and parent-child relationships
-- **Advanced Optimization**: Adaptive parameters, Pareto optimization, species preservation
+
+### Advanced Features (New)
+- **Temperature Variation**: Dynamic temperature control for balanced exploration/exploitation
+- **Adaptive Population Size**: Automatically adjusts population based on diversity metrics
+- **Memory & Learning System**: Persistent learning from past sessions with parameter optimization
+- **Hybrid Selection Strategies**: 7 selection methods with UCB1-based adaptive switching
+- **Advanced Crossover Operators**: 10 crossover types including semantic and edge recombination
+- **Intelligent Mutation**: 9 mutation strategies with fitness landscape analysis
+- **Embedding Providers**: Support for OpenAI, Sentence Transformers, Cohere, Voyage AI
 - **Client-Generated Mode**: Support for human-in-the-loop idea generation
 - **Claude Evaluation Mode**: Combine algorithmic fitness with Claude's qualitative assessment
+- **Advanced Optimization**: Adaptive parameters, Pareto optimization, species preservation
 
 ## How the Genetic Algorithm Works
 
@@ -293,6 +303,8 @@ ANTHROPIC_MODEL=claude-3-opus-20240229             # Default model for Anthropic
 - `OPENAI_API_KEY`: OpenAI API key (required for embeddings)
 - `OPENROUTER_API_KEY`: OpenRouter API key (required for LLM generation)
 - `ANTHROPIC_API_KEY`: Anthropic API key (optional alternative LLM)
+- `COHERE_API_KEY`: Cohere API key (optional for embeddings)
+- `VOYAGE_API_KEY`: Voyage AI API key (optional for embeddings)
 
 #### Model Selection
 - `OPENROUTER_MODEL`: Model to use with OpenRouter (default: `meta-llama/llama-3.2-3b-instruct`)
@@ -308,6 +320,10 @@ ANTHROPIC_MODEL=claude-3-opus-20240229             # Default model for Anthropic
 - `GENETIC_MCP_GPU`: Enable GPU acceleration (`true`/`false`)
 - `WORKER_POOL_SIZE`: Number of parallel LLM workers (default: 5)
 - `SESSION_TTL_SECONDS`: Session timeout in seconds (default: 3600)
+- `GENETIC_MCP_MEMORY_ENABLED`: Enable memory & learning system (`true`/`false`, default: true)
+- `GENETIC_MCP_MEMORY_DB`: Path to memory database (default: `genetic_mcp_memory.db`)
+- `GENETIC_MCP_OPTIMIZATION_ENABLED`: Enable advanced optimization features (`true`/`false`)
+- `GENETIC_MCP_OPTIMIZATION_LEVEL`: Optimization level (`basic`, `enhanced`, `gpu`, `full`)
 
 #### Logging Configuration
 - `GENETIC_MCP_LOG_LEVEL`: Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`)
@@ -331,7 +347,13 @@ Create a new genetic algorithm session:
   },
   "models": ["openrouter", "anthropic"],  // Optional
   "client_generated": false,  // Set to true for client-generated mode
-  "optimization_level": "standard"  // Optional: "basic", "standard", "advanced"
+  "optimization_level": "enhanced",  // Optional: "basic", "enhanced", "gpu", "full"
+  "adaptive_population": true,  // Enable adaptive population size
+  "min_population": 5,
+  "max_population": 100,
+  "diversity_threshold": 0.3,
+  "plateau_generations": 3,
+  "use_memory_system": true  // Enable learning from past sessions
 }
 ```
 
@@ -438,6 +460,21 @@ Get detailed optimization report for a session:
 }
 ```
 
+### 12. get_memory_stats
+Get memory system statistics and status:
+```json
+{}  // No parameters required
+```
+
+### 13. get_category_insights
+Get insights for a specific prompt category:
+```json
+{
+  "category": "code_generation",  // or "creative_writing", "business_ideas", etc.
+  "days": 30  // Number of days to look back
+}
+```
+
 ## Usage Example
 
 ### Standard Mode (LLM-Generated Ideas)
@@ -480,7 +517,7 @@ results = await generation_task
 ## Testing
 
 ```bash
-# Run all tests (42 tests currently passing)
+# Run all tests (105+ tests currently passing)
 pytest tests/ -v
 
 # Run unit tests only
@@ -509,7 +546,7 @@ genetic_mcp/
 ├── models.py                    # Pydantic data models (v2)
 ├── server.py                    # FastMCP server implementation
 ├── session_manager.py           # Session lifecycle management
-├── worker_pool.py               # Async LLM worker orchestration
+├── worker_pool.py               # Async LLM worker orchestration (with temperature variation)
 ├── genetic_algorithm.py         # Core GA operations
 ├── genetic_algorithm_optimized.py # Enhanced GA with adaptive strategies
 ├── fitness.py                   # Multi-objective fitness evaluation
@@ -517,8 +554,14 @@ genetic_mcp/
 ├── llm_client.py                # Multi-model LLM support
 ├── diversity_manager.py         # Species preservation and diversity
 ├── optimization_coordinator.py  # Advanced GA orchestration
+├── adaptive_population.py       # Dynamic population size management
+├── memory_system.py             # Persistent learning & parameter optimization
+├── hybrid_selection.py          # Multi-strategy selection with UCB1
+├── advanced_crossover.py        # 10 crossover operators with adaptation
+├── intelligent_mutation.py      # 9 mutation strategies with learning
+├── embedding_providers.py       # Multiple embedding backends
 ├── gpu_*.py                     # GPU acceleration modules
-└── tests/                       # Comprehensive test suite
+└── tests/                       # Comprehensive test suite (105+ tests)
 ```
 
 ## Logging
