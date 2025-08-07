@@ -277,12 +277,14 @@ The system follows a modular architecture with clear separation of concerns:
 Key environment variables:
 
 ### LLM Provider Configuration
+- `DEFAULT_PROVIDER`: **REQUIRED** - Default LLM provider (openai, anthropic, openrouter)
 - `MODEL`: **REQUIRED** - Default model for idea generation (e.g., meta-llama/llama-3.2-3b-instruct)
-- `OPENROUTER_API_KEY`: Required for LLM generation (configured in .env)
-- `ANTHROPIC_API_KEY`: Optional alternative LLM provider
-- `OPENROUTER_MODEL`: OpenRouter-specific model override (defaults to MODEL)
-- `OPENAI_MODEL`: OpenAI-specific model override (defaults to MODEL if GPT model)
-- `ANTHROPIC_MODEL`: Anthropic-specific model override (defaults to MODEL if Claude model)
+- `OPENAI_API_KEY`: Required if DEFAULT_PROVIDER=openai or for embedding fallback
+- `ANTHROPIC_API_KEY`: Required if DEFAULT_PROVIDER=anthropic  
+- `OPENROUTER_API_KEY`: Required if DEFAULT_PROVIDER=openrouter
+- `OPENAI_MODEL`: Provider-specific model override (defaults to MODEL)
+- `ANTHROPIC_MODEL`: Provider-specific model override (defaults to MODEL)
+- `OPENROUTER_MODEL`: Provider-specific model override (defaults to MODEL)
 
 ### Embedding Provider Configuration
 - `EMBEDDING_PROVIDER`: Choose embedding backend (openai/sentence-transformer/cohere/voyage/dummy)
@@ -428,9 +430,16 @@ Example scripts in the `examples/` directory:
 
 3. Set up LLM provider in `.env`:
    ```bash
+   # Choose your default provider
+   DEFAULT_PROVIDER=openrouter
    OPENROUTER_API_KEY=your-openrouter-key
-   # Or use other providers:
+   
+   # Alternative providers:
+   # DEFAULT_PROVIDER=anthropic
    # ANTHROPIC_API_KEY=your-anthropic-key
+   
+   # DEFAULT_PROVIDER=openai
+   # OPENAI_API_KEY=your-openai-key
    ```
 
 4. Run tests to verify setup:

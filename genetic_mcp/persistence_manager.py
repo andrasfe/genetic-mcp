@@ -1,17 +1,17 @@
 """Session persistence manager for genetic MCP server."""
 
-import json
-import sqlite3
-import pickle
+import asyncio
 import gzip
+import json
+import pickle
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-import asyncio
+from typing import Any
+
 import aiosqlite
 
-from .models import Session, Idea, Worker, FitnessWeights, GeneticParameters
 from .logging_config import setup_logging
+from .models import FitnessWeights, GeneticParameters, Idea, Session, Worker
 
 logger = setup_logging(component="persistence_manager")
 
@@ -146,12 +146,11 @@ class PersistenceManager:
             self._initialized = True
             logger.info(f"Persistence manager initialized with database: {self.db_path}")
 
-    async def save_session(self, session: Session, checkpoint_name: Optional[str] = None) -> None:
+    async def save_session(self, session: Session, checkpoint_name: str | None = None) -> None:
         """Save a complete session to the database."""
         await self.initialize()
 
-        async with self._lock:
-            async with aiosqlite.connect(self.db_path) as db:
+        async with self._lock, aiosqlite.connect(self.db_path) as db:
                 try:
                     await db.execute("BEGIN TRANSACTION")
 
@@ -173,7 +172,7 @@ class PersistenceManager:
                         await self._save_embeddings_cache(db, session.id, session._fitness_evaluator.embeddings_cache)
 
                     await db.commit()
-                    logger.info(f"Successfully saved session {session.id}" + 
+                    logger.info(f"Successfully saved session {session.id}" +
                                (f" with checkpoint '{checkpoint_name}'" if checkpoint_name else ""))
 
                 except Exception as e:
@@ -181,7 +180,7 @@ class PersistenceManager:
                     logger.error(f"Failed to save session {session.id}: {e}")
                     raise
 
-    async def load_session(self, session_id: str) -> Optional[Session]:
+    async def load_session(self, session_id: str) -> Session | None:
         """Load a complete session from the database."""
         await self.initialize()
 
@@ -205,29 +204,29 @@ class PersistenceManager:
             logger.info(f"Successfully loaded session {session_id} with {len(session.ideas)} ideas and {len(session.workers)} workers")
             return session
 
-    async def list_saved_sessions(self, client_id: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    async def list_saved_sessions(self, client_id: str | None = None, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """List saved sessions with basic metadata."""
         await self.initialize()
 
         async with aiosqlite.connect(self.db_path) as db:
             if client_id:
                 query = """
-                    SELECT id, client_id, prompt, mode, status, current_generation, 
+                    SELECT id, client_id, prompt, mode, status, current_generation,
                            execution_time_seconds, created_at, updated_at, saved_at,
                            (SELECT COUNT(*) FROM ideas WHERE session_id = sessions.id) as idea_count
-                    FROM sessions 
+                    FROM sessions
                     WHERE client_id = ?
-                    ORDER BY saved_at DESC 
+                    ORDER BY saved_at DESC
                     LIMIT ? OFFSET ?
                 """
                 params = (client_id, limit, offset)
             else:
                 query = """
-                    SELECT id, client_id, prompt, mode, status, current_generation, 
+                    SELECT id, client_id, prompt, mode, status, current_generation,
                            execution_time_seconds, created_at, updated_at, saved_at,
                            (SELECT COUNT(*) FROM ideas WHERE session_id = sessions.id) as idea_count
-                    FROM sessions 
-                    ORDER BY saved_at DESC 
+                    FROM sessions
+                    ORDER BY saved_at DESC
                     LIMIT ? OFFSET ?
                 """
                 params = (limit, offset)
@@ -257,8 +256,7 @@ class PersistenceManager:
         """Delete a session and all associated data."""
         await self.initialize()
 
-        async with self._lock:
-            async with aiosqlite.connect(self.db_path) as db:
+        async with self._lock, aiosqlite.connect(self.db_path) as db:
                 # Check if session exists
                 async with db.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)) as cursor:
                     if not await cursor.fetchone():
@@ -267,11 +265,11 @@ class PersistenceManager:
                 # Delete session (CASCADE will handle related tables)
                 await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
                 await db.commit()
-                
+
                 logger.info(f"Successfully deleted session {session_id}")
                 return True
 
-    async def save_checkpoint(self, session: Session, checkpoint_name: str, additional_data: Optional[Dict[str, Any]] = None) -> None:
+    async def save_checkpoint(self, session: Session, checkpoint_name: str, additional_data: dict[str, Any] | None = None) -> None:
         """Save a checkpoint for a session."""
         await self.initialize()
 
@@ -304,13 +302,13 @@ class PersistenceManager:
 
         logger.info(f"Saved checkpoint '{checkpoint_name}' for session {session.id} at generation {session.current_generation}")
 
-    async def load_checkpoint(self, session_id: str, checkpoint_name: str) -> Optional[Dict[str, Any]]:
+    async def load_checkpoint(self, session_id: str, checkpoint_name: str) -> dict[str, Any] | None:
         """Load a specific checkpoint for a session."""
         await self.initialize()
 
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("""
-                SELECT checkpoint_data FROM session_checkpoints 
+                SELECT checkpoint_data FROM session_checkpoints
                 WHERE session_id = ? AND checkpoint_name = ?
                 ORDER BY created_at DESC LIMIT 1
             """, (session_id, checkpoint_name)) as cursor:
@@ -321,18 +319,17 @@ class PersistenceManager:
             checkpoint_data = pickle.loads(gzip.decompress(row[0]))
             return checkpoint_data
 
-    async def list_checkpoints(self, session_id: str) -> List[Dict[str, Any]]:
+    async def list_checkpoints(self, session_id: str) -> list[dict[str, Any]]:
         """List all checkpoints for a session."""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute("""
-                SELECT checkpoint_name, generation, created_at 
-                FROM session_checkpoints 
+        async with aiosqlite.connect(self.db_path) as db, db.execute("""
+                SELECT checkpoint_name, generation, created_at
+                FROM session_checkpoints
                 WHERE session_id = ?
                 ORDER BY created_at DESC
             """, (session_id,)) as cursor:
-                rows = await cursor.fetchall()
+            rows = await cursor.fetchall()
 
         return [
             {
@@ -367,15 +364,15 @@ class PersistenceManager:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session.id, session.client_id, session.prompt, session.mode.value,
-            json.dumps(session.parameters.model_dump()), 
-            json.dumps(session.fitness_weights.model_dump()), 
+            json.dumps(session.parameters.model_dump()),
+            json.dumps(session.fitness_weights.model_dump()),
             session.status, session.client_generated, session.claude_evaluation_enabled,
             session.claude_evaluation_weight, session.adaptive_population_enabled,
             json.dumps(session.adaptive_population_config), session.memory_enabled,
             json.dumps(session.parameter_recommendation), session.execution_time_seconds,
             session.hybrid_selection_enabled, session.selection_strategy,
             session.selection_adaptation_window, session.selection_exploration_constant,
-            session.selection_min_uses_per_strategy, 
+            session.selection_min_uses_per_strategy,
             json.dumps(session.selection_performance_history),
             session.advanced_crossover_enabled, session.crossover_strategy,
             session.crossover_adaptation_enabled, session.crossover_performance_tracking,
@@ -389,7 +386,7 @@ class PersistenceManager:
             session.created_at.isoformat(), session.updated_at.isoformat()
         ))
 
-    async def _save_ideas(self, db: aiosqlite.Connection, session_id: str, ideas: List[Idea]) -> None:
+    async def _save_ideas(self, db: aiosqlite.Connection, session_id: str, ideas: list[Idea]) -> None:
         """Save ideas to the database."""
         # Clear existing ideas for this session
         await db.execute("DELETE FROM ideas WHERE session_id = ?", (session_id,))
@@ -409,7 +406,7 @@ class PersistenceManager:
                 idea.claude_score, idea.combined_fitness
             ))
 
-    async def _save_workers(self, db: aiosqlite.Connection, session_id: str, workers: List[Worker]) -> None:
+    async def _save_workers(self, db: aiosqlite.Connection, session_id: str, workers: list[Worker]) -> None:
         """Save workers to the database."""
         # Clear existing workers for this session
         await db.execute("DELETE FROM workers WHERE session_id = ?", (session_id,))
@@ -443,7 +440,7 @@ class PersistenceManager:
             VALUES (?, ?, ?, ?)
         """, (session.id, session.current_generation, checkpoint_name, compressed_data))
 
-    async def _save_embeddings_cache(self, db: aiosqlite.Connection, session_id: str, embeddings_cache: Dict[str, Any]) -> None:
+    async def _save_embeddings_cache(self, db: aiosqlite.Connection, session_id: str, embeddings_cache: dict[str, Any]) -> None:
         """Save embeddings cache to the database."""
         # Clear existing embeddings for this session
         await db.execute("DELETE FROM embeddings_cache WHERE session_id = ?", (session_id,))
@@ -456,7 +453,7 @@ class PersistenceManager:
                 VALUES (?, ?, ?)
             """, (session_id, content_hash, compressed_embedding))
 
-    async def _load_ideas(self, db: aiosqlite.Connection, session_id: str) -> List[Idea]:
+    async def _load_ideas(self, db: aiosqlite.Connection, session_id: str) -> list[Idea]:
         """Load ideas from the database."""
         async with db.execute("""
             SELECT id, content, generation, parent_ids, scores, fitness, metadata,
@@ -484,7 +481,7 @@ class PersistenceManager:
 
         return ideas
 
-    async def _load_workers(self, db: aiosqlite.Connection, session_id: str) -> List[Worker]:
+    async def _load_workers(self, db: aiosqlite.Connection, session_id: str) -> list[Worker]:
         """Load workers from the database."""
         from .models import WorkerStatus
 
@@ -567,20 +564,20 @@ class PersistenceManager:
 
         async with aiosqlite.connect(self.db_path) as db:
             # Delete old sessions (CASCADE will handle related tables)
-            async with db.execute("""
-                DELETE FROM sessions 
-                WHERE datetime(saved_at) < datetime('now', '-{} days')
-            """.format(days_old)) as cursor:
+            async with db.execute(f"""
+                DELETE FROM sessions
+                WHERE datetime(saved_at) < datetime('now', '-{days_old} days')
+            """) as cursor:
                 rows_affected = cursor.rowcount
 
             await db.commit()
-            
+
             if rows_affected > 0:
                 logger.info(f"Cleaned up {rows_affected} sessions older than {days_old} days")
-            
+
             return rows_affected
 
-    async def get_database_stats(self) -> Dict[str, Any]:
+    async def get_database_stats(self) -> dict[str, Any]:
         """Get database statistics."""
         await self.initialize()
 

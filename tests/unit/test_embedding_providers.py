@@ -77,6 +77,7 @@ class TestCohereV2Constants:
             "float", "int8", "uint8", "binary", "ubinary"
         } == CohereV2EmbeddingProvider.VALID_EMBEDDING_TYPES
 
+    @patch.dict('sys.modules', {'cohere': None})
     def test_cohere_v2_initialization_without_cohere(self):
         """Test initialization fails without cohere library."""
         with pytest.raises(ImportError) as exc_info:

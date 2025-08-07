@@ -5,7 +5,6 @@ import time
 import uuid
 from asyncio import TimeoutError
 from datetime import datetime, timedelta
-from typing import Optional
 
 from .adaptive_population import AdaptivePopulationManager, PopulationConfig
 from .diversity_manager import DiversityManager
@@ -44,7 +43,7 @@ class SessionManager:
         self.sessions: dict[str, Session] = {}
         self.client_sessions: dict[str, list[str]] = {}
         self._cleanup_task: asyncio.Task | None = None
-        
+
         # Persistence configuration
         self.persistence_manager = PersistenceManager(persistence_db_path)
         self.enable_auto_save = enable_auto_save
@@ -54,12 +53,12 @@ class SessionManager:
         """Start the session manager."""
         # Initialize persistence manager
         await self.persistence_manager.initialize()
-        
+
         # Start cleanup and auto-save tasks
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         if self.enable_auto_save:
             self._auto_save_task = asyncio.create_task(self._auto_save_loop())
-        
+
         logger.info("Session manager started with persistence enabled")
 
     async def stop(self) -> None:
@@ -70,10 +69,10 @@ class SessionManager:
             tasks_to_cancel.append(self._cleanup_task)
         if self._auto_save_task:
             tasks_to_cancel.append(self._auto_save_task)
-            
+
         for task in tasks_to_cancel:
             task.cancel()
-            
+
         if tasks_to_cancel:
             await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
 
@@ -394,7 +393,7 @@ class SessionManager:
                     if self.enable_auto_save and generation % 3 == 0:
                         try:
                             await self.persistence_manager.save_checkpoint(
-                                session, 
+                                session,
                                 f"generation_{generation}",
                                 {"population_size": len(current_population), "best_fitness": max(idea.fitness for idea in current_population) if current_population else 0.0}
                             )
@@ -568,7 +567,7 @@ class SessionManager:
             logger.debug(f"Auto-saved {saved_count} sessions")
 
     # Persistence methods
-    async def save_session_to_db(self, session_id: str, checkpoint_name: Optional[str] = None) -> bool:
+    async def save_session_to_db(self, session_id: str, checkpoint_name: str | None = None) -> bool:
         """Save a session to the database."""
         session = self.sessions.get(session_id)
         if not session:
@@ -582,21 +581,21 @@ class SessionManager:
             logger.error(f"Failed to save session {session_id}: {e}")
             return False
 
-    async def load_session_from_db(self, session_id: str) -> Optional[Session]:
+    async def load_session_from_db(self, session_id: str) -> Session | None:
         """Load a session from the database."""
         try:
             session = await self.persistence_manager.load_session(session_id)
             if session:
                 # Reconstruct session components
                 await self._reconstruct_session_components(session)
-                
+
                 # Add to active sessions
                 self.sessions[session_id] = session
                 if session.client_id not in self.client_sessions:
                     self.client_sessions[session.client_id] = []
                 if session_id not in self.client_sessions[session.client_id]:
                     self.client_sessions[session.client_id].append(session_id)
-                
+
                 logger.info(f"Successfully loaded session {session_id} from database")
                 return session
             else:
@@ -630,7 +629,7 @@ class SessionManager:
             logger.error(f"Failed to resume session {session_id}: {e}")
             return False
 
-    async def list_saved_sessions(self, client_id: Optional[str] = None, limit: int = 50, offset: int = 0):
+    async def list_saved_sessions(self, client_id: str | None = None, limit: int = 50, offset: int = 0):
         """List saved sessions from the database."""
         try:
             return await self.persistence_manager.list_saved_sessions(client_id, limit, offset)
@@ -638,7 +637,7 @@ class SessionManager:
             logger.error(f"Failed to list saved sessions: {e}")
             return []
 
-    async def save_checkpoint(self, session_id: str, checkpoint_name: str, additional_data: Optional[dict] = None) -> bool:
+    async def save_checkpoint(self, session_id: str, checkpoint_name: str, additional_data: dict | None = None) -> bool:
         """Save a checkpoint for a session."""
         session = self.sessions.get(session_id)
         if not session:

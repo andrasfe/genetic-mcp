@@ -289,14 +289,14 @@ class EmbeddingProviderFactory:
             api_key = kwargs.get("api_key") or os.getenv("COHERE_API_KEY")
             if not api_key:
                 raise ValueError("Cohere API key required")
-            model = kwargs.get("model", "embed-english-v3.0")
+            model = kwargs.get("model") or os.getenv("EMBEDDING_MODEL", "embed-english-v3.0")
             return CohereEmbeddingProvider(api_key, model)
 
         elif provider_type == "cohere-v2":
             api_key = kwargs.get("api_key") or os.getenv("COHERE_API_KEY")
             if not api_key:
                 raise ValueError("Cohere API key required")
-            model = kwargs.get("model", "embed-english-v3.0")
+            model = kwargs.get("model") or os.getenv("EMBEDDING_MODEL", "embed-english-v3.0")
             input_type = kwargs.get("input_type", "search_document")
             embedding_type = kwargs.get("embedding_type", "float")
             dimensions = kwargs.get("dimensions")
@@ -336,8 +336,20 @@ def get_embedding_provider() -> EmbeddingProvider:
     if _embedding_provider is None:
         # Check for explicitly configured provider
         provider_type = os.getenv("EMBEDDING_PROVIDER")
-        embedding_model = os.getenv("EMBEDDING_MODEL")
-        
+
+        # Get provider-specific model, falling back to default EMBEDDING_MODEL
+        default_model = os.getenv("EMBEDDING_MODEL")
+        if provider_type == "openai":
+            embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL", default_model)
+        elif provider_type == "cohere":
+            embedding_model = os.getenv("COHERE_EMBEDDING_MODEL", default_model)
+        elif provider_type == "sentence-transformer":
+            embedding_model = os.getenv("SENTENCE_TRANSFORMER_EMBEDDING_MODEL", default_model)
+        elif provider_type == "voyage":
+            embedding_model = os.getenv("VOYAGE_EMBEDDING_MODEL", default_model)
+        else:
+            embedding_model = default_model
+
         if provider_type:
             # Use the configured provider
             try:
@@ -345,7 +357,7 @@ def get_embedding_provider() -> EmbeddingProvider:
                 if embedding_model:
                     kwargs["model"] = embedding_model
                 _embedding_provider = EmbeddingProviderFactory.create(provider_type, **kwargs)
-                logger.info(f"Using configured {provider_type} embedding provider")
+                logger.info(f"Using configured {provider_type} embedding provider with model {embedding_model}")
             except Exception as e:
                 logger.error(f"Failed to create {provider_type} provider: {e}")
                 raise
