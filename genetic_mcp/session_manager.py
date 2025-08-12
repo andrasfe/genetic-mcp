@@ -295,6 +295,18 @@ class SessionManager:
             # Evaluate initial population
             session._fitness_evaluator.evaluate_population(initial_ideas, target_embedding)
 
+            # Save initial population checkpoint
+            if self.enable_auto_save:
+                try:
+                    await self.persistence_manager.save_checkpoint(
+                        session,
+                        "generation_0_initial",
+                        {"population_size": len(initial_ideas), "best_fitness": max(idea.fitness for idea in initial_ideas) if initial_ideas else 0.0}
+                    )
+                    logger.debug(f"Saved initial population checkpoint for session {session.id}")
+                except Exception as e:
+                    logger.warning(f"Failed to save initial population checkpoint for session {session.id}: {e}")
+
             if session.mode == EvolutionMode.SINGLE_PASS:
                 # Just return top-K
                 top_ideas = session.get_top_ideas(top_k)
@@ -389,8 +401,8 @@ class SessionManager:
                     session.ideas.extend(new_population)
                     current_population = new_population
 
-                    # Save checkpoint every few generations
-                    if self.enable_auto_save and generation % 3 == 0:
+                    # Save checkpoint after every generation to ensure we can resume
+                    if self.enable_auto_save:
                         try:
                             await self.persistence_manager.save_checkpoint(
                                 session,
