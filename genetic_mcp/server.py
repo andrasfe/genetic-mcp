@@ -133,7 +133,10 @@ def initialize_llm_client() -> MultiModelClient:
         raise ValueError("MODEL environment variable must be set in .env file")
 
     # Get default provider configuration
-    default_provider = os.getenv("DEFAULT_PROVIDER", "openai").lower()
+    default_provider = os.getenv("DEFAULT_PROVIDER")
+    if not default_provider:
+        raise ValueError("DEFAULT_PROVIDER environment variable must be set to one of: openai, anthropic, openrouter")
+    default_provider = default_provider.lower()
 
     # Get provider-specific models, falling back to default_model
     openai_model = os.getenv("OPENAI_MODEL", default_model)

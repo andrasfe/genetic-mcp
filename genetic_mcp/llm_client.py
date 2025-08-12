@@ -54,13 +54,10 @@ class OpenAIClient(LLMClient):
             raise
 
     async def embed(self, text: str) -> list[float]:
-        """Generate embeddings using OpenAI API."""
+        """Generate embeddings using the configured embedding provider."""
+        from .embedding_providers import embed_text
         try:
-            response = await self.client.embeddings.create(
-                model=self.embedding_model,
-                input=text
-            )
-            return response.data[0].embedding
+            return await embed_text(text)
         except Exception as e:
             logger.error(f"OpenAI embedding error: {e}")
             raise
@@ -99,19 +96,10 @@ class AnthropicClient(LLMClient):
             raise
 
     async def embed(self, text: str) -> list[float]:
-        """Generate embeddings (using OpenAI as fallback)."""
-        if not self._openai_client:
-            raise ValueError(
-                "OpenAI API key is required for embeddings. "
-                "Please set OPENAI_API_KEY in your environment or .env file."
-            )
-
+        """Generate embeddings using the configured embedding provider."""
+        from .embedding_providers import embed_text
         try:
-            response = await self._openai_client.embeddings.create(
-                model=os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"),
-                input=text
-            )
-            return response.data[0].embedding
+            return await embed_text(text)
         except Exception as e:
             logger.error(f"Embedding error: {e}")
             raise
@@ -156,19 +144,10 @@ class OpenRouterClient(LLMClient):
             raise
 
     async def embed(self, text: str) -> list[float]:
-        """Generate embeddings (using OpenAI as fallback)."""
-        if not self._openai_client:
-            raise ValueError(
-                "OpenAI API key is required for embeddings. "
-                "Please set OPENAI_API_KEY in your environment or .env file."
-            )
-
+        """Generate embeddings using the configured embedding provider."""
+        from .embedding_providers import embed_text
         try:
-            response = await self._openai_client.embeddings.create(
-                model=os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"),
-                input=text
-            )
-            return response.data[0].embedding
+            return await embed_text(text)
         except Exception as e:
             logger.error(f"Embedding error: {e}")
             raise

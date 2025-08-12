@@ -178,6 +178,14 @@ class SessionManager:
             self.client_sessions[client_id] = []
         self.client_sessions[client_id].append(session_id)
 
+        # Save session to database immediately after creation
+        if self.enable_auto_save:
+            try:
+                await self.persistence_manager.save_session(session, "session_created")
+                logger.debug(f"Saved newly created session {session_id} to database")
+            except Exception as e:
+                logger.warning(f"Failed to save newly created session {session_id}: {e}")
+
         log_performance(logger, "CREATE_SESSION", time.time() - start_time,
                        session_id=session_id,
                        client_id=client_id,
@@ -295,17 +303,17 @@ class SessionManager:
             # Evaluate initial population
             session._fitness_evaluator.evaluate_population(initial_ideas, target_embedding)
 
-            # Save initial population checkpoint
+            # Save initial population with full session data
             if self.enable_auto_save:
                 try:
-                    await self.persistence_manager.save_checkpoint(
+                    # Save the complete session, not just a checkpoint
+                    await self.persistence_manager.save_session(
                         session,
-                        "generation_0_initial",
-                        {"population_size": len(initial_ideas), "best_fitness": max(idea.fitness for idea in initial_ideas) if initial_ideas else 0.0}
+                        "generation_0_initial"
                     )
-                    logger.debug(f"Saved initial population checkpoint for session {session.id}")
+                    logger.debug(f"Saved initial population for session {session.id}")
                 except Exception as e:
-                    logger.warning(f"Failed to save initial population checkpoint for session {session.id}: {e}")
+                    logger.warning(f"Failed to save initial population for session {session.id}: {e}")
 
             if session.mode == EvolutionMode.SINGLE_PASS:
                 # Just return top-K
@@ -401,17 +409,17 @@ class SessionManager:
                     session.ideas.extend(new_population)
                     current_population = new_population
 
-                    # Save checkpoint after every generation to ensure we can resume
+                    # Save full session after every generation to ensure we can resume
                     if self.enable_auto_save:
                         try:
-                            await self.persistence_manager.save_checkpoint(
+                            # Save the complete session with all ideas and state
+                            await self.persistence_manager.save_session(
                                 session,
-                                f"generation_{generation}",
-                                {"population_size": len(current_population), "best_fitness": max(idea.fitness for idea in current_population) if current_population else 0.0}
+                                f"generation_{generation}"
                             )
-                            logger.debug(f"Saved checkpoint for session {session.id} at generation {generation}")
+                            logger.debug(f"Saved full session {session.id} at generation {generation}")
                         except Exception as e:
-                            logger.warning(f"Failed to save checkpoint for session {session.id}: {e}")
+                            logger.warning(f"Failed to save session {session.id} at generation {generation}: {e}")
 
                 # Get top ideas from final population
                 top_ideas = session.get_top_ideas(top_k)
