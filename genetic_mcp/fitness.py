@@ -5,6 +5,7 @@ import time
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
+from .fitness_detail_aware import DetailMetrics
 from .logging_config import log_operation, log_performance, setup_logging
 from .models import FitnessWeights, Idea
 
@@ -14,7 +15,13 @@ logger = setup_logging(component="fitness")
 class FitnessEvaluator:
     """Evaluates fitness of ideas based on multiple criteria."""
 
-    def __init__(self, weights: FitnessWeights | None = None):
+    def __init__(self, weights: FitnessWeights | None = None, use_detail_metrics: bool = False):
+        """Initialize fitness evaluator.
+
+        Args:
+            weights: Fitness weights for base and detail metrics
+            use_detail_metrics: Whether to use detail-aware metrics in feasibility calculation
+        """
         self.weights = weights or FitnessWeights()
         self.embeddings_cache: dict[str, list[float]] = {}
 
@@ -26,10 +33,33 @@ class FitnessEvaluator:
         self.weight_adaptation_rate = 0.1
         self.weight_history: list[FitnessWeights] = []
 
+        # Detail-aware metrics
+        self.use_detail_metrics = use_detail_metrics or self.weights.has_detail_weights()
+        self.detail_metrics = DetailMetrics() if self.use_detail_metrics else None
+
     def calculate_fitness(self, idea: Idea, all_ideas: list[Idea],
                          target_embedding: list[float],
                          claude_evaluation_weight: float = 0.0) -> float:
-        """Calculate overall fitness score for an idea."""
+        """Calculate overall fitness score for an idea.
+
+        Mathematical formulation:
+            fitness = w_r * relevance + w_n * novelty + w_f * feasibility
+
+        where w_r, w_n, w_f are weights that sum to 1.0.
+
+        If detail metrics are enabled, feasibility incorporates detail score:
+            feasibility = (1 - β) * heuristic + β * detail_score
+            detail_score = Σ(w_i * metric_i) for i in {δ, α, κ, τ}
+
+        Args:
+            idea: The idea to evaluate
+            all_ideas: All ideas in the population (for novelty calculation)
+            target_embedding: Target embedding for relevance calculation
+            claude_evaluation_weight: Weight for Claude evaluation (0-1)
+
+        Returns:
+            Final fitness score in [0, 1]
+        """
         # Get individual scores
         relevance = self._calculate_relevance(idea, target_embedding)
         novelty = self._calculate_novelty(idea, all_ideas)
@@ -63,9 +93,13 @@ class FitnessEvaluator:
                         f"combined={idea.combined_fitness:.3f}")
             return idea.combined_fitness
 
+        detail_info = ""
+        if self.use_detail_metrics and 'detail_score' in idea.metadata:
+            detail_info = f", detail={idea.metadata['detail_score']:.3f}"
+
         logger.debug(f"Calculated fitness for idea {idea.id}: "
                     f"fitness={fitness:.3f}, relevance={relevance:.3f}, "
-                    f"novelty={novelty:.3f}, feasibility={feasibility:.3f}")
+                    f"novelty={novelty:.3f}, feasibility={feasibility:.3f}{detail_info}")
 
         return fitness
 
@@ -117,11 +151,60 @@ class FitnessEvaluator:
         return novelty
 
     def _calculate_feasibility(self, idea: Idea) -> float:
-        """Calculate feasibility score (placeholder for critic model)."""
-        # In a real implementation, this would use a critic model
-        # For now, we'll use a simple heuristic based on content length
-        # and structure
+        """Calculate feasibility score.
 
+        If detail metrics are enabled, combines heuristic feasibility with detail score.
+        Otherwise, uses simple heuristic based on content length and structure.
+
+        Mathematical formulation with detail metrics:
+            feasibility = (1 - β) * heuristic_score + β * detail_score
+
+        where β is the detail contribution weight (0.5 by default when detail metrics enabled).
+        """
+        # Calculate heuristic feasibility (baseline)
+        heuristic_feasibility = self._calculate_heuristic_feasibility(idea)
+
+        # If detail metrics not enabled, return heuristic score
+        if not self.use_detail_metrics or self.detail_metrics is None:
+            return heuristic_feasibility
+
+        # Calculate detail score using configured weights
+        detail_weights = {
+            'delta': self.weights.implementation_depth,
+            'alpha': self.weights.actionability,
+            'kappa': self.weights.completeness,
+            'tau': self.weights.technical_precision
+        }
+
+        # Normalize weights if they don't sum to 1
+        weight_sum = sum(detail_weights.values())
+        if weight_sum > 0:
+            detail_weights = {k: v / weight_sum for k, v in detail_weights.items()}
+        else:
+            # Use equal weights if none specified
+            detail_weights = {'delta': 0.25, 'alpha': 0.25, 'kappa': 0.25, 'tau': 0.25}
+
+        detail_score = self.detail_metrics.calculate_detail_score(idea, detail_weights)
+
+        # Store detail score in idea metadata
+        idea.metadata['detail_score'] = detail_score
+        idea.metadata['heuristic_feasibility'] = heuristic_feasibility
+
+        # Combine heuristic and detail scores
+        # β determines the contribution of detail metrics (default 0.5)
+        beta = 0.5
+        feasibility = (1 - beta) * heuristic_feasibility + beta * detail_score
+
+        logger.debug(f"Feasibility for idea {idea.id}: {feasibility:.3f} "
+                    f"(heuristic={heuristic_feasibility:.3f}, detail={detail_score:.3f})")
+
+        return min(feasibility, 1.0)
+
+    def _calculate_heuristic_feasibility(self, idea: Idea) -> float:
+        """Calculate heuristic feasibility score based on content analysis.
+
+        This is the baseline feasibility calculation without detail metrics.
+        """
         content = idea.content.lower()
 
         # Penalize very short or very long ideas

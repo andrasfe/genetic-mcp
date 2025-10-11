@@ -103,7 +103,7 @@ class TestFitnessWeights:
 
     def test_invalid_weights_sum(self):
         """Test that weights must sum to 1.0."""
-        with pytest.raises(ValueError, match="Weights must sum to 1.0"):
+        with pytest.raises(ValueError, match="Base weights .* must sum to 1.0"):
             FitnessWeights(
                 relevance=0.5,
                 novelty=0.5,

@@ -73,7 +73,7 @@ uv pip install -e ".[dev]"
 
 ### Testing
 ```bash
-# Run all tests (126+ tests currently passing)
+# Run all tests (144 tests currently passing)
 make test
 
 # Run unit tests only
@@ -129,7 +129,7 @@ The system follows a modular architecture with clear separation of concerns:
 
 ### Core Components
 
-1. **MCP Server** (`server.py`): FastMCP-based server implementing 8 genetic algorithm tools
+1. **MCP Server** (`server.py`): FastMCP-based server implementing 17 MCP tools
    - `create_session`: Initialize GA session with configuration (supports client-generated mode)
    - `run_generation`: Execute the complete generation process
    - `inject_ideas`: Inject client-generated ideas into a session (client-generated mode only)
@@ -180,10 +180,11 @@ The system follows a modular architecture with clear separation of concerns:
    - Factory pattern for easy provider switching
    - Automatic fallback: Sentence Transformers → OpenAI → Error
 
-8. **GPU Acceleration** (optional `gpu_*.py` modules):
-   - CUDA-accelerated embeddings
+8. **GPU Acceleration** (optional `gpu_*.py` modules - requires CUDA):
+   - CUDA-accelerated embeddings (requires PyTorch with CUDA)
    - Parallel fitness computation
-   - Automatic CPU fallback
+   - Automatic CPU fallback when GPU unavailable
+   - Not required for basic operation
 
 9. **Diversity Manager** (`diversity_manager.py`): Preserves population diversity
    - Species clustering using DBSCAN
@@ -239,6 +240,21 @@ The system follows a modular architecture with clear separation of concerns:
     - Transfer learning from successful sessions to new ones
     - Operation effectiveness tracking for genetic operators
     - Category-specific insights and performance statistics
+
+16. **Persistence Manager** (`persistence_manager.py`): Complete session save/load/resume
+    - SQLite database for session storage (genetic_mcp_sessions.db)
+    - Auto-save every 3 minutes during evolution
+    - Gzip compression for embeddings and large objects
+    - Named checkpoints and incremental saves
+    - Full session reconstruction after interruption
+    - Session metadata and filtering capabilities
+
+17. **Intelligent Mutation System** (`intelligent_mutation.py`): Advanced mutation with learning
+    - 10 mutation strategies with performance tracking
+    - Component-level mutation rate adaptation
+    - Fitness landscape analysis for guided mutations
+    - Integration with memory system for learning
+    - Strategy performance metrics and recommendations
 
 ## Key Implementation Details
 
@@ -297,11 +313,15 @@ Key environment variables:
 - `VOYAGE_API_KEY`: For Voyage AI embeddings (optional)
 
 ### Server Configuration
-- `GENETIC_MCP_TRANSPORT`: Transport mode (stdio/http)
-- `GENETIC_MCP_DEBUG`: Enable debug logging
-- `GENETIC_MCP_GPU`: Enable GPU acceleration
-- `WORKER_POOL_SIZE`: Number of parallel workers (default 5)
-- `SESSION_TTL_SECONDS`: Session timeout (default 3600)
+- `GENETIC_MCP_TRANSPORT`: Transport mode (stdio/http, default: stdio)
+- `GENETIC_MCP_DEBUG`: Enable debug logging (true/false, default: false)
+- `GENETIC_MCP_GPU`: Enable GPU acceleration (true/false, default: false)
+- `WORKER_POOL_SIZE`: Number of parallel workers (default: 5)
+- `SESSION_TTL_SECONDS`: Session timeout (default: 3600)
+- `GENETIC_MCP_MEMORY_ENABLED`: Enable memory & learning system (default: true)
+- `GENETIC_MCP_MEMORY_DB`: Path to memory database (default: genetic_mcp_memory.db)
+- `GENETIC_MCP_LOG_LEVEL`: Logging level (DEBUG/INFO/WARNING/ERROR, default: INFO)
+- `GENETIC_MCP_LOG_FILE`: Optional log file path for persistent logging
 
 ## Testing Approach
 
@@ -403,6 +423,40 @@ The system supports multiple embedding providers with automatic fallback:
    - Without proper embeddings, fitness evaluation is significantly degraded
    - The system can still run but idea quality assessment will be random
    - Recommended: Install sentence-transformers or configure an API provider
+
+### Logging and Debugging
+
+The server includes comprehensive structured logging for troubleshooting:
+
+1. **Log Levels**: Configure via `GENETIC_MCP_LOG_LEVEL` (DEBUG, INFO, WARNING, ERROR)
+2. **Default Output**: Logs go to stderr by default (visible in terminal, captured by MCP clients)
+3. **File Logging**: Set `GENETIC_MCP_LOG_FILE` to enable persistent log files
+4. **Structured Context**: Each component logs with context (session_id, worker_id, generation, etc.)
+
+**What gets logged**:
+- MCP tool calls with parameters and execution time
+- Session lifecycle (creation, deletion, state transitions)
+- Worker pool operations (task distribution, success/failure rates)
+- Genetic algorithm steps (selection, crossover, mutation)
+- Fitness evaluation (population statistics, individual scores)
+- Performance metrics (convergence speed, diversity metrics)
+
+**Viewing logs**:
+```bash
+# Terminal output (when running directly)
+GENETIC_MCP_LOG_LEVEL=DEBUG genetic-mcp
+
+# Save to file
+GENETIC_MCP_LOG_FILE=./genetic_mcp.log genetic-mcp
+
+# Monitor log file
+tail -f ./genetic_mcp.log
+```
+
+**Claude Desktop logs** (when file logging not configured):
+- macOS: `~/Library/Logs/Claude/`
+- Windows: `%APPDATA%\Claude\logs\`
+- Linux: `~/.config/Claude/logs/`
 
 ## Example Usage
 
@@ -707,3 +761,113 @@ genetic_algorithm.record_crossover_performance(parent1, parent2, offspring)
 4. **Configure Wisely**: Adjust exploration factor based on problem complexity
 5. **Content Matters**: Complex ideas benefit more from advanced operators like concept mapping
 6. **Fallback Safety**: Advanced operators include robust fallback mechanisms
+
+## Intelligent Mutation Strategies
+
+The genetic-mcp server includes an advanced mutation system with 10+ strategies that learn from past performance and adapt based on fitness landscape analysis.
+
+### Available Mutation Strategies
+
+1. **Random Mutation**: Basic random modifications for baseline comparison
+   - Simple perturbations without guidance
+   - Useful for maintaining diversity baseline
+
+2. **Guided Mutation**: Uses historical performance to guide mutations
+   - Learns which mutation types work best
+   - Adapts based on component-level success rates
+
+3. **Adaptive Mutation**: Adjusts mutation parameters based on population state
+   - Increases mutation rate when population converges
+   - Reduces mutation rate when exploring successfully
+
+4. **Memetic Mutation**: Local search optimization combined with mutation
+   - Performs hill-climbing after mutation
+   - Refines ideas through iterative improvement
+
+5. **Context-Aware Mutation**: Considers idea context and domain knowledge
+   - Analyzes prompt category and domain
+   - Applies domain-specific mutation strategies
+
+6. **Directional Mutation**: Fitness gradient-based directional improvements
+   - Estimates fitness gradients through sampling
+   - Mutates in directions that improve fitness
+
+7. **Component-Based Mutation**: Mutates specific components with learned rates
+   - Tracks performance per component type
+   - Focuses mutations on high-impact components
+
+8. **Hill Climbing**: Greedy local search for refinement
+   - Accepts only improvements
+   - Good for late-stage optimization
+
+9. **Simulated Annealing**: Temperature-based acceptance of inferior mutations
+   - Allows temporary fitness decreases
+   - Helps escape local optima
+
+10. **Gradient-Based Mutation**: Estimates fitness gradients for guided changes
+    - Uses finite differences to estimate gradients
+    - Applies gradient ascent principles
+
+### Configuration Options
+
+Enable intelligent mutation in session creation:
+
+```json
+{
+  "intelligent_mutation_enabled": true,
+  "mutation_strategy": "adaptive",  // or specific strategy name
+  "component_mutation_tracking": true,
+  "fitness_landscape_analysis": true,
+  "mutation_config": {
+    "base_mutation_rate": 0.1,
+    "adaptive_adjustment": true,
+    "learning_rate": 0.05,
+    "temperature": 1.0  // for simulated_annealing
+  }
+}
+```
+
+**Available Strategies**:
+- `"random"`, `"guided"`, `"adaptive"`, `"memetic"`
+- `"context_aware"`, `"directional"`, `"component_based"`
+- `"hill_climbing"`, `"simulated_annealing"`, `"gradient_based"`
+
+### Key Features
+
+- **Component-Level Tracking**: Learns which idea components benefit most from mutation
+- **Performance Metrics**: Tracks success rates and fitness improvements per strategy
+- **Fitness Landscape Analysis**: Analyzes fitness surface to guide mutation direction
+- **Memory Integration**: Stores mutation effectiveness patterns for future sessions
+- **Adaptive Rates**: Automatically adjusts mutation rates based on population diversity
+
+### Performance Tracking
+
+The system tracks comprehensive metrics for mutations:
+
+- **Success Rate**: Percentage of mutations that improve fitness
+- **Average Improvement**: Mean fitness gain from successful mutations
+- **Component Metrics**: Per-component mutation effectiveness
+- **Strategy Performance**: Comparative performance across strategies
+
+### Getting Performance Reports
+
+```python
+# Get mutation performance report
+report = genetic_algorithm.get_mutation_performance_report()
+
+# Record mutation results
+genetic_algorithm.record_mutation_performance(
+    original_idea,
+    mutated_idea,
+    strategy="adaptive"
+)
+```
+
+### Best Practices
+
+1. **Start with Adaptive**: Use `"adaptive"` mutation for automatic strategy selection
+2. **Enable Component Tracking**: Track which components benefit most from mutation
+3. **Use Fitness Landscape Analysis**: Enable for complex optimization problems
+4. **Combine with Memory System**: Let the system learn across sessions
+5. **Monitor Performance**: Review mutation reports to understand effectiveness
+6. **Late-Stage Refinement**: Switch to hill-climbing or memetic for final optimization

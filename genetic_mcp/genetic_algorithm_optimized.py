@@ -3,6 +3,7 @@
 import logging
 import random
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -49,7 +50,8 @@ class OptimizedGeneticAlgorithm:
         crossover_strategy: str = None,
         crossover_config: dict = None,
         intelligent_mutation_enabled: bool = False,
-        target_embedding: list[float] | None = None
+        target_embedding: list[float] | None = None,
+        detail_config: Any | None = None
     ):
         self.parameters = parameters or GeneticParameters()
         self.llm_client = llm_client
@@ -73,6 +75,7 @@ class OptimizedGeneticAlgorithm:
         # Intelligent mutation setup
         self.intelligent_mutation_enabled = intelligent_mutation_enabled
         self.target_embedding = target_embedding
+        self.detail_config = detail_config
 
         if self.intelligent_mutation_enabled:
             self.mutation_manager = IntelligentMutationManager(llm_client=llm_client)
@@ -307,7 +310,8 @@ class OptimizedGeneticAlgorithm:
                 idea=idea,
                 all_ideas=all_ideas,
                 generation=generation,
-                target_embedding=self.target_embedding
+                target_embedding=self.target_embedding,
+                detail_config=self.detail_config
             )
 
             logger.debug(f"Intelligent mutation applied to idea {idea.id} in generation {generation}")

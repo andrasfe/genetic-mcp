@@ -215,7 +215,8 @@ class IdeaGenerator:
         self.llm_client = llm_client
 
     async def generate_initial_population(self, prompt: str, size: int,
-                                        system_prompt: str | None = None) -> list[Idea]:
+                                        system_prompt: str | None = None,
+                                        detail_config: Any = None) -> list[Idea]:
         """Generate initial population of ideas."""
         start_time = time.time()
         log_operation(logger, "GENERATE_INITIAL_POPULATION",
@@ -225,7 +226,7 @@ class IdeaGenerator:
         # Submit all tasks
         task_ids = []
         for i in range(size):
-            variation_prompt = self._create_variation_prompt(prompt, i, size)
+            variation_prompt = self._create_variation_prompt(prompt, i, size, detail_config)
             task_id = await self.worker_pool.submit_task(
                 variation_prompt,
                 system_prompt,
@@ -261,13 +262,21 @@ class IdeaGenerator:
         return ideas
 
     async def generate_from_parents(self, parent_contents: list[str],
-                                   prompt: str, count: int) -> list[Idea]:
+                                   prompt: str, count: int,
+                                   detail_config: Any = None) -> list[Idea]:
         """Generate new ideas based on parent ideas."""
         system_prompt = (
             "You are a creative AI that builds upon and combines existing ideas. "
             "Given parent ideas, create new variations that combine their best elements "
-            "while adding novel insights."
+            "while adding novel insights. Focus on creating actionable, implementable solutions "
+            "with specific technical details."
         )
+
+        # Enhance system prompt with detail requirements if provided
+        if detail_config:
+            detail_fragment = detail_config.get_detail_prompt_fragment()
+            if detail_fragment:
+                system_prompt += f"\n\n{detail_fragment}"
 
         ideas = []
         for i in range(count):
@@ -291,19 +300,29 @@ class IdeaGenerator:
 
         return ideas
 
-    def _create_variation_prompt(self, base_prompt: str, index: int, total: int) -> str:
+    def _create_variation_prompt(self, base_prompt: str, index: int, total: int,
+                                detail_config: Any = None) -> str:
         """Create variation of prompt to encourage diversity."""
+        # Enhanced variations with focus on implementation details
         variations = [
-            f"{base_prompt}\n\nFocus on practical implementation details.",
-            f"{base_prompt}\n\nEmphasize innovative and unconventional approaches.",
-            f"{base_prompt}\n\nConsider scalability and long-term implications.",
-            f"{base_prompt}\n\nPrioritize user experience and accessibility.",
-            f"{base_prompt}\n\nExplore technical challenges and solutions.",
-            f"{base_prompt}\n\nThink about cost-effectiveness and resource efficiency.",
-            f"{base_prompt}\n\nConsider environmental and social impact.",
-            f"{base_prompt}\n\nFocus on integration with existing systems.",
-            f"{base_prompt}\n\nEmphasize security and privacy considerations.",
-            f"{base_prompt}\n\nExplore cutting-edge technologies and methodologies."
+            f"{base_prompt}\n\nFocus on practical implementation details with specific code examples and technologies.",
+            f"{base_prompt}\n\nEmphasize innovative and unconventional approaches with concrete technical specifications.",
+            f"{base_prompt}\n\nConsider scalability and long-term implications. Include architecture patterns and data structures.",
+            f"{base_prompt}\n\nPrioritize user experience and accessibility with step-by-step implementation guides.",
+            f"{base_prompt}\n\nExplore technical challenges and solutions. Provide specific algorithms and code snippets.",
+            f"{base_prompt}\n\nThink about cost-effectiveness and resource efficiency with measurable performance metrics.",
+            f"{base_prompt}\n\nConsider environmental and social impact with actionable implementation steps.",
+            f"{base_prompt}\n\nFocus on integration with existing systems. Specify APIs, protocols, and interfaces.",
+            f"{base_prompt}\n\nEmphasize security and privacy considerations with specific security patterns and practices.",
+            f"{base_prompt}\n\nExplore cutting-edge technologies and methodologies with concrete framework recommendations."
         ]
 
-        return variations[index % len(variations)]
+        prompt = variations[index % len(variations)]
+
+        # Append detail requirements if provided
+        if detail_config:
+            detail_fragment = detail_config.get_detail_prompt_fragment()
+            if detail_fragment:
+                prompt += f"\n\n{detail_fragment}"
+
+        return prompt

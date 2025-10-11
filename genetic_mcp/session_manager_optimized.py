@@ -215,7 +215,8 @@ class OptimizedSessionManager(SessionManager):
             else:
                 initial_population = await session._idea_generator.generate_initial_population(
                     session.prompt,
-                    session.parameters.population_size
+                    session.parameters.population_size,
+                    detail_config=session.detail_config
                 )
                 session.ideas.extend(initial_population)
 
@@ -278,7 +279,8 @@ class OptimizedSessionManager(SessionManager):
             else:
                 initial_ideas = await session._idea_generator.generate_initial_population(
                     session.prompt,
-                    session.parameters.population_size
+                    session.parameters.population_size,
+                    detail_config=session.detail_config
                 )
             session.ideas.extend(initial_ideas)
 

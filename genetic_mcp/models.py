@@ -49,13 +49,74 @@ class Worker(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class DetailConfig(BaseModel):
+    """Configuration for detail level in generated ideas."""
+    level: str = Field(default="medium")  # "low", "medium", "high"
+    require_code_examples: bool = False
+    require_step_by_step: bool = False
+    require_technical_specs: bool = False
+    min_sections: int = Field(default=0, ge=0)
+
+    def get_detail_prompt_fragment(self) -> str:
+        """Generate prompt fragment based on detail configuration."""
+        fragments = []
+
+        # Base detail level instruction
+        if self.level == "high":
+            fragments.append("Provide comprehensive, detailed responses with thorough explanations.")
+        elif self.level == "medium":
+            fragments.append("Provide balanced responses with sufficient detail.")
+        elif self.level == "low":
+            fragments.append("Provide concise, focused responses.")
+
+        # Specific requirements
+        if self.require_code_examples:
+            fragments.append(
+                "Include specific code examples with concrete implementations. "
+                "Show actual syntax and working code snippets that demonstrate the concept."
+            )
+
+        if self.require_step_by_step:
+            fragments.append(
+                "Break down the solution into numbered, actionable steps. "
+                "Each step should be clear, specific, and implementable."
+            )
+
+        if self.require_technical_specs:
+            fragments.append(
+                "Include technical specifications such as: "
+                "specific technologies/frameworks to use, architecture patterns, "
+                "data structures, algorithms, API designs, and performance considerations."
+            )
+
+        if self.min_sections > 0:
+            fragments.append(
+                f"Structure your response with at least {self.min_sections} distinct sections "
+                "covering different aspects of the solution."
+            )
+
+        return " ".join(fragments)
+
+
 class FitnessWeights(BaseModel):
-    """Weights for fitness calculation."""
+    """Weights for fitness calculation.
+
+    Base weights (relevance, novelty, feasibility) must sum to 1.0.
+    Detail-aware weights are optional and applied within feasibility calculation.
+    """
     relevance: float = 0.4
     novelty: float = 0.3
     feasibility: float = 0.3
 
-    @field_validator("relevance", "novelty", "feasibility")
+    # Optional detail-aware metric weights (used within feasibility if provided)
+    # These represent the composition of the detail score, should sum to 1.0 if used
+    implementation_depth: float = 0.0  # δ (delta)
+    actionability: float = 0.0  # α (alpha)
+    completeness: float = 0.0  # κ (kappa)
+    technical_precision: float = 0.0  # τ (tau)
+
+    @field_validator("relevance", "novelty", "feasibility",
+                    "implementation_depth", "actionability", "completeness", "technical_precision")
     @classmethod
     def validate_weight(cls, v: float) -> float:
         if not 0 <= v <= 1:
@@ -64,12 +125,41 @@ class FitnessWeights(BaseModel):
 
     @field_validator("feasibility")
     @classmethod
-    def validate_sum(cls, v: float, info) -> float:
+    def validate_base_sum(cls, v: float, info) -> float:
+        """Validate that base weights sum to 1.0."""
         values = info.data
         total = v + values.get("relevance", 0) + values.get("novelty", 0)
         if abs(total - 1.0) > 0.001:  # Allow small floating point errors
-            raise ValueError(f"Weights must sum to 1.0, got {total}")
+            raise ValueError(f"Base weights (relevance, novelty, feasibility) must sum to 1.0, got {total}")
         return v
+
+    @field_validator("technical_precision")
+    @classmethod
+    def validate_detail_sum(cls, v: float, info) -> float:
+        """Validate that detail weights sum to 1.0 if any are non-zero."""
+        values = info.data
+        detail_weights = [
+            values.get("implementation_depth", 0),
+            values.get("actionability", 0),
+            values.get("completeness", 0),
+            v  # technical_precision
+        ]
+
+        total = sum(detail_weights)
+
+        # If any detail weights are provided, they should sum to 1.0
+        if total > 0.001 and abs(total - 1.0) > 0.001:  # Some detail weights provided
+            raise ValueError(
+                f"Detail weights (implementation_depth, actionability, completeness, technical_precision) "
+                f"must sum to 1.0 when used, got {total}"
+            )
+
+        return v
+
+    def has_detail_weights(self) -> bool:
+        """Check if detail-aware weights are configured."""
+        return (self.implementation_depth > 0 or self.actionability > 0 or
+                self.completeness > 0 or self.technical_precision > 0)
 
 
 class GeneticParameters(BaseModel):
@@ -95,9 +185,10 @@ class Session(BaseModel):
     id: str
     client_id: str
     prompt: str
-    mode: EvolutionMode = EvolutionMode.SINGLE_PASS
+    mode: EvolutionMode = EvolutionMode.ITERATIVE  # Changed from SINGLE_PASS to enable genetic algorithm by default
     parameters: GeneticParameters = Field(default_factory=GeneticParameters)
     fitness_weights: FitnessWeights = Field(default_factory=FitnessWeights)
+    detail_config: DetailConfig = Field(default_factory=DetailConfig)
     workers: list[Worker] = Field(default_factory=list)
     ideas: list[Idea] = Field(default_factory=list)
     current_generation: int = 0
@@ -186,12 +277,13 @@ class Session(BaseModel):
 class GenerationRequest(BaseModel):
     """Request to generate ideas."""
     prompt: str
-    mode: EvolutionMode = EvolutionMode.SINGLE_PASS
+    mode: EvolutionMode = EvolutionMode.ITERATIVE  # Changed from SINGLE_PASS to enable genetic algorithm by default
     population_size: int = Field(default=10, ge=2)
     top_k: int = Field(default=5, ge=1)
     generations: int = Field(default=5, ge=1)
     parameters: GeneticParameters | None = None
     fitness_weights: FitnessWeights | None = None
+    detail_config: DetailConfig | None = None  # Configuration for detail level in generated ideas
     models: list[str] | None = None  # LLM models to use
     client_generated: bool = Field(default=False)  # Whether client generates ideas instead of LLM workers
     adaptive_population: bool = Field(default=False)  # Enable adaptive population size

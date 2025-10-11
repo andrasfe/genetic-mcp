@@ -14,6 +14,7 @@ from .llm_client import MultiModelClient
 from .logging_config import log_error, log_operation, log_performance, setup_logging
 from .memory_system import get_memory_system
 from .models import (
+    DetailConfig,
     EvolutionMode,
     FitnessWeights,
     GenerationProgress,
@@ -138,6 +139,10 @@ class SessionManager:
             logger.info(f"Using memory-recommended fitness weights for session {session_id}")
         else:
             fitness_weights = FitnessWeights()
+
+        # Use detail config from request or default
+        detail_config = request.detail_config if request.detail_config else DetailConfig()
+
         session = Session(
             id=session_id,
             client_id=client_id,
@@ -146,6 +151,7 @@ class SessionManager:
             client_generated=request.client_generated,
             parameters=parameters,
             fitness_weights=fitness_weights,
+            detail_config=detail_config,
             adaptive_population_enabled=request.adaptive_population,
             adaptive_population_config=request.adaptive_population_config or {},
             memory_enabled=request.use_memory_system,
@@ -288,7 +294,8 @@ class SessionManager:
 
                 initial_ideas = await session._idea_generator.generate_initial_population(
                     session.prompt,
-                    session.parameters.population_size
+                    session.parameters.population_size,
+                    detail_config=session.detail_config
                 )
                 session.ideas.extend(initial_ideas)
 
@@ -390,7 +397,8 @@ class SessionManager:
                                 generated = await session._idea_generator.generate_from_parents(
                                     parent_contents,
                                     session.prompt,
-                                    1
+                                    1,
+                                    detail_config=session.detail_config
                                 )
 
                                 if generated:

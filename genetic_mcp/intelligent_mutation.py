@@ -27,6 +27,7 @@ class MutationStrategy(str, Enum):
     HILL_CLIMBING = "hill_climbing"
     SIMULATED_ANNEALING = "simulated_annealing"
     GRADIENT_BASED = "gradient_based"
+    IMPLEMENTATION_DEEPENING = "implementation_deepening"
 
 
 @dataclass
@@ -146,6 +147,11 @@ class IntelligentMutationManager:
             'problem_statement': ['problem', 'issue', 'challenge', 'need'],
             'solution_approach': ['solution', 'approach', 'method', 'technique'],
             'implementation': ['implement', 'build', 'create', 'develop'],
+            'implementation_code': ['code', 'function', 'class', 'api', 'endpoint', 'algorithm'],
+            'technical_stack': ['technology', 'framework', 'library', 'stack', 'tool', 'platform'],
+            'architecture': ['architecture', 'design', 'structure', 'pattern', 'component', 'module'],
+            'testing': ['test', 'testing', 'validation', 'verification', 'quality'],
+            'deployment': ['deploy', 'deployment', 'production', 'infrastructure', 'hosting'],
             'benefits': ['benefit', 'advantage', 'improve', 'enhance'],
             'constraints': ['constraint', 'limitation', 'requirement', 'must'],
             'examples': ['example', 'instance', 'case', 'sample']
@@ -157,7 +163,8 @@ class IntelligentMutationManager:
         all_ideas: list[Idea],
         generation: int,
         strategy: MutationStrategy | None = None,
-        target_embedding: list[float] | None = None
+        target_embedding: list[float] | None = None,
+        detail_config: Any | None = None
     ) -> str:
         """Apply intelligent mutation to an idea."""
         start_time = time.time()
@@ -166,7 +173,7 @@ class IntelligentMutationManager:
 
         # Select mutation strategy if not specified
         if strategy is None:
-            strategy = self._select_optimal_strategy(idea, generation)
+            strategy = self._select_optimal_strategy(idea, generation, detail_config)
 
         logger.debug(f"Applying {strategy} mutation to idea {idea.id}")
 
@@ -190,6 +197,8 @@ class IntelligentMutationManager:
                 mutated_content = await self._simulated_annealing_mutation(idea, generation)
             elif strategy == MutationStrategy.GRADIENT_BASED:
                 mutated_content = await self._gradient_based_mutation(idea, all_ideas)
+            elif strategy == MutationStrategy.IMPLEMENTATION_DEEPENING:
+                mutated_content = await self._implementation_deepening_mutation(idea)
             else:  # RANDOM
                 mutated_content = await self._random_mutation(idea)
 
@@ -237,14 +246,36 @@ class IntelligentMutationManager:
 
                 break
 
-    def _select_optimal_strategy(self, idea: Idea, generation: int) -> MutationStrategy:
+    def _select_optimal_strategy(self, idea: Idea, generation: int, detail_config: Any | None = None) -> MutationStrategy:
         """Select the optimal mutation strategy based on learned performance."""
-        # Early generations: more exploration
+        # Check if detail_config favors implementation deepening
+        if detail_config is not None:
+            # Check if detail_config has high implementation requirements
+            should_deepen = False
+
+            # Check for explicit attributes
+            if (hasattr(detail_config, 'require_code_examples') and detail_config.require_code_examples) or \
+               (hasattr(detail_config, 'require_technical_specs') and detail_config.require_technical_specs):
+                should_deepen = True
+            elif hasattr(detail_config, 'level') and detail_config.level == 'high' and random.random() < 0.6:
+                # For high detail level, favor implementation deepening with 60% probability
+                should_deepen = True
+
+            # If detail requirements are high, strongly favor implementation_deepening
+            if should_deepen:
+                # 70% chance to use implementation_deepening, 30% for other strategies
+                if random.random() < 0.7:
+                    return MutationStrategy.IMPLEMENTATION_DEEPENING
+                # Otherwise use memetic or component-based which also help with details
+                return random.choice([MutationStrategy.MEMETIC, MutationStrategy.COMPONENT_BASED])
+
+        # Early generations: more exploration (but include implementation_deepening)
         if generation < 3:
             exploration_strategies = [
                 MutationStrategy.RANDOM,
                 MutationStrategy.CONTEXT_AWARE,
-                MutationStrategy.COMPONENT_BASED
+                MutationStrategy.COMPONENT_BASED,
+                MutationStrategy.IMPLEMENTATION_DEEPENING  # Add to early exploration
             ]
             return random.choice(exploration_strategies)
 
@@ -255,7 +286,8 @@ class IntelligentMutationManager:
             disruptive_strategies = [
                 MutationStrategy.SIMULATED_ANNEALING,
                 MutationStrategy.MEMETIC,
-                MutationStrategy.DIRECTIONAL
+                MutationStrategy.DIRECTIONAL,
+                MutationStrategy.IMPLEMENTATION_DEEPENING  # Can help escape local optima by adding detail
             ]
             return random.choice(disruptive_strategies)
 
@@ -299,9 +331,15 @@ class IntelligentMutationManager:
                 Promising direction observed: {direction}
 
                 Modify the original idea to incorporate elements that led to the promising direction,
-                while maintaining the core concept. Focus on incremental improvements.
+                while maintaining the core concept. Focus on incremental improvements and especially
+                on adding implementation details such as:
+                - Specific technology names and frameworks
+                - Code examples or pseudocode
+                - Step-by-step implementation approaches
+                - Data structures and API designs
+                - Testing and deployment considerations
 
-                Return only the modified idea:
+                Return only the modified idea with enhanced implementation details:
                 """
 
                 try:
@@ -367,13 +405,19 @@ class IntelligentMutationManager:
         Mutated idea: {mutated}
 
         Apply local search to find small improvements to the mutated idea.
-        Look for:
-        1. More precise terminology
-        2. Better structure or organization
-        3. Missing implementation details
-        4. Clearer explanations
+        Look for and prioritize:
+        1. **MISSING IMPLEMENTATION DETAILS** - Add specific code examples, technology names, API specifications
+        2. **MISSING IMPLEMENTATION DETAILS** - Include numbered implementation steps and concrete technical approaches
+        3. **MISSING IMPLEMENTATION DETAILS** - Specify data models, testing strategies, and deployment considerations
+        4. More precise terminology (replace generic terms with specific technology names)
+        5. Better structure or organization
+        6. Clearer explanations with concrete examples
 
-        Return the locally optimized version:
+        IMPORTANT: Focus heavily on adding implementation details. If the idea lacks code examples,
+        specific technologies, or concrete steps, add them. Replace vague terms like "using modern
+        frameworks" with specific choices like "using React and FastAPI".
+
+        Return the locally optimized version with enhanced implementation details:
         """
 
         try:
@@ -486,13 +530,32 @@ class IntelligentMutationManager:
             ComponentMutationRate(component_to_mutate)
         ).current_rate
 
+        # Check if this is an implementation-related component
+        implementation_components = {
+            'implementation', 'implementation_code', 'technical_stack',
+            'architecture', 'testing', 'deployment'
+        }
+        is_implementation = component_to_mutate in implementation_components
+
+        implementation_guidance = ""
+        if is_implementation:
+            implementation_guidance = """
+
+            FOCUS ON IMPLEMENTATION DETAILS:
+            - Add specific code examples or pseudocode
+            - Replace generic technology references with specific names (e.g., "React" instead of "modern framework")
+            - Include numbered implementation steps
+            - Specify APIs, data models, and interfaces
+            - Add testing approaches and deployment considerations
+            """
+
         prompt = f"""
         You are performing component-based mutation on a specific part of an idea.
 
         Original idea: {idea.content}
 
         Target component: {component_to_mutate}
-        Mutation intensity: {mutation_rate}
+        Mutation intensity: {mutation_rate}{implementation_guidance}
 
         Modify only the {component_to_mutate} component with the specified intensity.
         Keep other parts of the idea unchanged.
@@ -618,6 +681,88 @@ class IntelligentMutationManager:
             )
         except Exception as e:
             logger.error(f"Gradient-based mutation failed: {e}")
+            return await self._component_based_mutation(idea)
+
+    async def _implementation_deepening_mutation(self, idea: Idea) -> str:
+        """Mutation that specifically adds implementation details to ideas."""
+        if not self.llm_client:
+            return await self._random_mutation(idea)
+
+        # Analyze what implementation details are missing
+        content_lower = idea.content.lower()
+        missing_details = []
+
+        if not any(keyword in content_lower for keyword in ['code', 'function', 'class', 'def ', 'const ', 'let ']):
+            missing_details.append("code examples or pseudocode")
+
+        if not any(keyword in content_lower for keyword in ['react', 'vue', 'django', 'flask', 'fastapi', 'express', 'spring', 'framework']):
+            missing_details.append("specific technology/framework names")
+
+        if not any(keyword in content_lower for keyword in ['step 1', 'first,', 'then,', 'finally,', '1.', '2.']):
+            missing_details.append("numbered implementation steps")
+
+        if not any(keyword in content_lower for keyword in ['api', 'endpoint', 'interface', 'schema', 'model']):
+            missing_details.append("API/data model specifications")
+
+        if not any(keyword in content_lower for keyword in ['test', 'unit test', 'integration test', 'validation']):
+            missing_details.append("testing approach")
+
+        if not any(keyword in content_lower for keyword in ['deploy', 'docker', 'kubernetes', 'aws', 'azure', 'cloud']):
+            missing_details.append("deployment considerations")
+
+        missing_summary = ", ".join(missing_details) if missing_details else "general implementation detail"
+
+        prompt = f"""
+        You are performing IMPLEMENTATION DEEPENING mutation to add concrete technical details.
+
+        Original idea: {idea.content}
+
+        Analysis shows this idea is missing: {missing_summary}
+
+        Your task is to SIGNIFICANTLY ENHANCE this idea with implementation details:
+
+        1. **CODE EXAMPLES**: Add specific code snippets or pseudocode showing key implementations
+           - Use actual syntax (Python, JavaScript, etc.)
+           - Show data structures, function signatures, or class definitions
+
+        2. **SPECIFIC TECHNOLOGIES**: Replace generic terms with specific technology names
+           - Instead of "database", specify "PostgreSQL" or "MongoDB"
+           - Instead of "web framework", specify "FastAPI" or "React"
+           - Instead of "cloud platform", specify "AWS" or "Google Cloud"
+
+        3. **IMPLEMENTATION STEPS**: Provide a numbered, step-by-step implementation approach
+           - Step 1: Specific action with technical details
+           - Step 2: Next action with configuration details
+           - Step 3: Integration steps with code references
+
+        4. **API/DATA SPECIFICATIONS**: Define specific APIs, endpoints, or data models
+           - Example: "POST /api/v1/ideas endpoint accepting JSON: {{title, description, tags[]}}"
+           - Example: "User model: {{id: UUID, email: string, created_at: timestamp}}"
+
+        5. **TESTING APPROACH**: Specify how to test the implementation
+           - Unit tests for core logic using pytest or jest
+           - Integration tests for API endpoints
+           - Example test cases
+
+        6. **DEPLOYMENT DETAILS**: Describe deployment setup
+           - Docker containerization with Dockerfile
+           - CI/CD pipeline (GitHub Actions, Jenkins)
+           - Cloud hosting specifics (AWS ECS, Heroku, Vercel)
+
+        CRITICAL: Do not just add vague statements. Add CONCRETE, SPECIFIC, TECHNICAL details.
+        Transform abstract ideas into implementable solutions with clear technical choices.
+
+        Return the deeply enhanced idea with rich implementation details:
+        """
+
+        try:
+            return await self.llm_client.generate(
+                prompt,
+                temperature=0.5,  # Moderate temperature for structured output
+                max_tokens=2000  # More tokens for detailed implementations
+            )
+        except Exception as e:
+            logger.error(f"Implementation deepening mutation failed: {e}")
             return await self._component_based_mutation(idea)
 
     async def _random_mutation(self, idea: Idea) -> str:
