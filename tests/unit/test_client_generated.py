@@ -18,6 +18,7 @@ def mock_llm_client():
     """Create a mock LLM client."""
     client = Mock()
     client.embed = AsyncMock(return_value=[0.1] * 768)  # Mock embedding
+    client.embed_batch = AsyncMock(side_effect=lambda texts: [[0.1] * 768 for _ in texts])  # Mock batch embedding
     client.generate = AsyncMock(return_value="Generated content")
     client.get_available_models = Mock(return_value=["model1", "model2"])
     return client

@@ -299,12 +299,18 @@ class SessionManager:
                 )
                 session.ideas.extend(initial_ideas)
 
-            # Get embeddings for all ideas and the target prompt
+            # Get embeddings for all ideas and the target prompt using batch processing
             await self._update_progress(session, "Generating embeddings...")
-            target_embedding = await self.llm_client.embed(session.prompt)
-
-            for idea in initial_ideas:
-                embedding = await self.llm_client.embed(idea.content)
+            
+            # Batch embed: prompt + all idea contents together for efficiency
+            all_texts = [session.prompt] + [idea.content for idea in initial_ideas]
+            all_embeddings = await self.llm_client.embed_batch(all_texts)
+            
+            # First embedding is for the target prompt
+            target_embedding = all_embeddings[0]
+            
+            # Remaining embeddings are for ideas
+            for idea, embedding in zip(initial_ideas, all_embeddings[1:], strict=False):
                 session._fitness_evaluator.add_embedding(idea.id, embedding)
 
             # Evaluate initial population
@@ -404,10 +410,15 @@ class SessionManager:
                                 if generated:
                                     idea.content = generated[0].content
 
-                    # Get embeddings for new ideas
-                    for idea in new_population:
-                        if idea.id not in session._fitness_evaluator.embeddings_cache:
-                            embedding = await self.llm_client.embed(idea.content)
+                    # Get embeddings for new ideas using batch processing
+                    ideas_needing_embeddings = [
+                        idea for idea in new_population
+                        if idea.id not in session._fitness_evaluator.embeddings_cache
+                    ]
+                    if ideas_needing_embeddings:
+                        texts = [idea.content for idea in ideas_needing_embeddings]
+                        embeddings = await self.llm_client.embed_batch(texts)
+                        for idea, embedding in zip(ideas_needing_embeddings, embeddings, strict=False):
                             session._fitness_evaluator.add_embedding(idea.id, embedding)
 
                     # Evaluate new population
@@ -696,16 +707,18 @@ class SessionManager:
                 population_config = PopulationConfig(**session.adaptive_population_config)
                 session._adaptive_population_manager = AdaptivePopulationManager(population_config)
 
-            # Pre-compute embeddings for existing ideas if fitness evaluator needs them
+            # Pre-compute embeddings for existing ideas using batch processing
             if session.ideas and hasattr(session._fitness_evaluator, 'embeddings_cache'):
-                for idea in session.ideas:
-                    if idea.content:
-                        try:
-                            # Generate embedding for idea content
-                            embedding = await self.llm_client.embed(idea.content)
+                ideas_with_content = [idea for idea in session.ideas if idea.content]
+                if ideas_with_content:
+                    try:
+                        texts = [idea.content for idea in ideas_with_content]
+                        embeddings = await self.llm_client.embed_batch(texts)
+                        for idea, embedding in zip(ideas_with_content, embeddings, strict=False):
                             session._fitness_evaluator.add_embedding(idea.id, embedding)
-                        except Exception as e:
-                            logger.warning(f"Failed to generate embedding for idea {idea.id}: {e}")
+                        logger.debug(f"Batch generated {len(embeddings)} embeddings for session {session.id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to batch generate embeddings for session {session.id}: {e}")
 
             logger.debug(f"Reconstructed components for session {session.id}")
 

@@ -36,6 +36,11 @@ class FitnessEvaluator:
         # Detail-aware metrics
         self.use_detail_metrics = use_detail_metrics or self.weights.has_detail_weights()
         self.detail_metrics = DetailMetrics() if self.use_detail_metrics else None
+        
+        # Cached distance matrix for vectorized novelty calculation
+        self._distance_matrix: np.ndarray | None = None
+        self._distance_matrix_ids: list[str] = []
+        self._distance_matrix_stale = True
 
     def calculate_fitness(self, idea: Idea, all_ideas: list[Idea],
                          target_embedding: list[float],
@@ -119,21 +124,26 @@ class FitnessEvaluator:
         return (similarity + 1) / 2
 
     def _calculate_novelty(self, idea: Idea, all_ideas: list[Idea]) -> float:
-        """Calculate novelty score based on distance from other ideas."""
+        """Calculate novelty score based on distance from other ideas.
+        
+        Uses vectorized operations with pre-computed distance matrix for efficiency.
+        """
         if idea.id not in self.embeddings_cache:
             return 0.5
 
         if len(all_ideas) <= 1:
             return 1.0  # First idea is maximally novel
 
+        # Use vectorized calculation if we have enough ideas
+        if len(all_ideas) >= 3:
+            return self._calculate_novelty_vectorized(idea, all_ideas)
+        
+        # Fallback for small populations
         idea_embedding = np.array(self.embeddings_cache[idea.id])
-
-        # Calculate distances to all other ideas
         distances = []
         for other in all_ideas:
             if other.id == idea.id or other.id not in self.embeddings_cache:
                 continue
-
             other_embedding = np.array(self.embeddings_cache[other.id])
             distance = np.linalg.norm(idea_embedding - other_embedding)
             distances.append(distance)
@@ -141,14 +151,61 @@ class FitnessEvaluator:
         if not distances:
             return 0.5
 
-        # Normalize by maximum possible distance (roughly sqrt(embedding_dim))
         embedding_dim = len(idea_embedding)
-        max_distance = np.sqrt(embedding_dim) * 2  # Rough estimate
-
+        max_distance = np.sqrt(embedding_dim) * 2
         avg_distance = np.mean(distances)
-        novelty = min(avg_distance / max_distance, 1.0)
-
-        return novelty
+        return min(avg_distance / max_distance, 1.0)
+    
+    def _calculate_novelty_vectorized(self, idea: Idea, all_ideas: list[Idea]) -> float:
+        """Vectorized novelty calculation using pre-computed distance matrix."""
+        # Rebuild distance matrix if stale or ids changed
+        current_ids = [i.id for i in all_ideas if i.id in self.embeddings_cache]
+        
+        if (self._distance_matrix_stale or 
+            self._distance_matrix is None or 
+            self._distance_matrix_ids != current_ids):
+            self._rebuild_distance_matrix(all_ideas)
+        
+        # Find idea's index in the matrix
+        if idea.id not in self._distance_matrix_ids:
+            return 0.5
+        
+        idx = self._distance_matrix_ids.index(idea.id)
+        
+        # Get distances from this idea to all others (excluding self)
+        distances = self._distance_matrix[idx]
+        # Exclude self (distance = 0) and compute mean of non-zero distances
+        non_zero_distances = distances[distances > 0]
+        
+        if len(non_zero_distances) == 0:
+            return 0.5
+        
+        # Normalize by maximum distance in matrix for consistent scaling
+        max_distance = np.max(self._distance_matrix) if np.max(self._distance_matrix) > 0 else 1.0
+        avg_distance = np.mean(non_zero_distances)
+        
+        return min(avg_distance / max_distance, 1.0)
+    
+    def _rebuild_distance_matrix(self, all_ideas: list[Idea]) -> None:
+        """Rebuild the distance matrix for vectorized novelty calculation."""
+        # Get ideas with embeddings
+        valid_ideas = [idea for idea in all_ideas if idea.id in self.embeddings_cache]
+        
+        if len(valid_ideas) < 2:
+            self._distance_matrix = np.array([[]])
+            self._distance_matrix_ids = []
+            self._distance_matrix_stale = False
+            return
+        
+        # Build embedding matrix
+        self._distance_matrix_ids = [idea.id for idea in valid_ideas]
+        embeddings_matrix = np.array([self.embeddings_cache[id_] for id_ in self._distance_matrix_ids])
+        
+        # Compute pairwise distances using cosine distance (1 - similarity)
+        # This is O(n²) but only done once per population evaluation
+        similarity_matrix = cosine_similarity(embeddings_matrix)
+        self._distance_matrix = 1 - similarity_matrix
+        self._distance_matrix_stale = False
 
     def _calculate_feasibility(self, idea: Idea) -> float:
         """Calculate feasibility score.
@@ -229,12 +286,18 @@ class FitnessEvaluator:
     def add_embedding(self, idea_id: str, embedding: list[float]) -> None:
         """Add embedding to cache."""
         self.embeddings_cache[idea_id] = embedding
+        # Invalidate distance matrix cache when new embeddings are added
+        self._distance_matrix_stale = True
 
     def evaluate_population(self, ideas: list[Idea], target_embedding: list[float],
                           claude_evaluation_weight: float = 0.0) -> None:
-        """Evaluate fitness for entire population."""
+        """Evaluate fitness for entire population using vectorized operations."""
         start_time = time.time()
         log_operation(logger, "EVALUATE_POPULATION", population_size=len(ideas))
+
+        # Pre-compute distance matrix once for all novelty calculations
+        if len(ideas) >= 3:
+            self._rebuild_distance_matrix(ideas)
 
         for idea in ideas:
             self.calculate_fitness(idea, ideas, target_embedding, claude_evaluation_weight)

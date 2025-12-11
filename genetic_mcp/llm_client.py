@@ -201,6 +201,18 @@ class MultiModelClient:
 
         return await self.clients[client_name].embed(text)
 
+    async def embed_batch(self, texts: list[str], client_name: str | None = None) -> list[list[float]]:
+        """Generate embeddings for multiple texts using batch processing.
+        
+        This is significantly faster than sequential embed() calls for large batches.
+        Uses the embedding provider's native batch support when available.
+        """
+        if not texts:
+            return []
+        
+        from .embedding_providers import embed_texts_batch
+        return await embed_texts_batch(texts)
+
     def get_available_models(self) -> list[str]:
         """Get list of available model names."""
         return list(self.clients.keys())

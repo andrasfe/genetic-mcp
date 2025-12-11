@@ -89,6 +89,9 @@ class HybridSelectionManager:
         self.generation_history: list[dict[str, Any]] = []
         self.current_generation = 0
         self.total_selections = 0
+        
+        # Cached log value for incremental UCB1 calculation
+        self._cached_log_total: float = 0.0
 
         # Strategy configuration
         self.strategy_configs = {
@@ -147,23 +150,33 @@ class HybridSelectionManager:
         return best_strategy
 
     def _calculate_ucb1_value(self, strategy: SelectionStrategy) -> float:
-        """Calculate UCB1 value for a strategy."""
+        """Calculate UCB1 value for a strategy using cached log value."""
         metrics = self.strategy_metrics[strategy]
 
         if metrics.times_used == 0:
             return float('inf')  # Unexplored strategies get highest priority
 
+        # Use cached UCB1 if available and still valid
+        if hasattr(metrics, '_cached_ucb1_total_selections'):
+            if metrics._cached_ucb1_total_selections == self.total_selections:
+                return metrics.ucb1_value
+        
         # Average reward (combination of multiple performance metrics)
         avg_reward = self._calculate_average_reward(metrics)
 
-        # Confidence interval
+        # Confidence interval using cached log value
+        if self._cached_log_total == 0 or self.total_selections != getattr(self, '_last_total_selections', -1):
+            self._cached_log_total = math.log(self.total_selections + 1)
+            self._last_total_selections = self.total_selections
+        
         confidence = self.exploration_constant * math.sqrt(
-            math.log(self.total_selections + 1) / metrics.times_used
+            self._cached_log_total / metrics.times_used
         )
 
         ucb1_value = avg_reward + confidence
         metrics.ucb1_value = ucb1_value
         metrics.confidence_interval = confidence
+        metrics._cached_ucb1_total_selections = self.total_selections
 
         return ucb1_value
 

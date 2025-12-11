@@ -17,6 +17,13 @@ class EmbeddingProvider(ABC):
         """Generate embeddings for text."""
         pass
 
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts. Override for batch-optimized implementations."""
+        import asyncio
+        # Default implementation: parallel individual calls
+        tasks = [self.embed(text) for text in texts]
+        return await asyncio.gather(*tasks)
+
     @abstractmethod
     def get_dimension(self) -> int:
         """Get the dimension of embeddings produced."""
@@ -42,6 +49,23 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             return response.data[0].embedding
         except Exception as e:
             logger.error(f"OpenAI embedding error: {e}")
+            raise
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts using native batch API."""
+        if not texts:
+            return []
+        try:
+            # OpenAI supports batch embedding natively
+            response = await self.client.embeddings.create(
+                model=self.model,
+                input=texts
+            )
+            # Sort by index to maintain order
+            sorted_data = sorted(response.data, key=lambda x: x.index)
+            return [item.embedding for item in sorted_data]
+        except Exception as e:
+            logger.error(f"OpenAI batch embedding error: {e}")
             raise
 
     def get_dimension(self) -> int:
@@ -72,6 +96,18 @@ class SentenceTransformerProvider(EmbeddingProvider):
             logger.error(f"Sentence Transformer embedding error: {e}")
             raise
 
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts using native batch encoding."""
+        if not texts:
+            return []
+        try:
+            # Sentence Transformers supports batch encoding natively and efficiently
+            embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+            return [emb.tolist() for emb in embeddings]
+        except Exception as e:
+            logger.error(f"Sentence Transformer batch embedding error: {e}")
+            raise
+
     def get_dimension(self) -> int:
         return int(self.dimension)
 
@@ -100,6 +136,22 @@ class CohereEmbeddingProvider(EmbeddingProvider):
             return list(response.embeddings[0])
         except Exception as e:
             logger.error(f"Cohere embedding error: {e}")
+            raise
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts using native batch API."""
+        if not texts:
+            return []
+        try:
+            # Cohere supports batch embedding natively
+            response = await self.client.embed(
+                texts=texts,
+                model=self.model,
+                input_type="search_document"
+            )
+            return [list(emb) for emb in response.embeddings]
+        except Exception as e:
+            logger.error(f"Cohere batch embedding error: {e}")
             raise
 
     def get_dimension(self) -> int:
@@ -197,6 +249,42 @@ class CohereV2EmbeddingProvider(EmbeddingProvider):
             logger.error(f"Cohere v2 embedding error: {e}")
             raise
 
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts using native batch API."""
+        if not texts:
+            return []
+        try:
+            # Build request parameters
+            params = {
+                "texts": texts,
+                "model": self.model,
+                "input_type": self.input_type,
+                "embedding_types": [self.embedding_type]
+            }
+
+            if self.custom_dimensions is not None:
+                params["dimensions"] = self.custom_dimensions
+
+            response = await self.client.embed(**params)
+
+            embeddings = response.embeddings
+            embedding_data = getattr(embeddings, self.embedding_type, None)
+
+            if embedding_data is None:
+                raise ValueError(f"Unsupported embedding_type: {self.embedding_type}")
+
+            results = [[float(x) for x in emb] for emb in embedding_data]
+
+            # Cache dimension on first successful call
+            if self._cached_dimension is None and results:
+                self._cached_dimension = len(results[0])
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Cohere v2 batch embedding error: {e}")
+            raise
+
     def get_dimension(self) -> int:
         """Get embedding dimensions.
 
@@ -251,6 +339,15 @@ class DummyEmbeddingProvider(EmbeddingProvider):
         seed = hash(text) % (2**32)
         np.random.seed(seed)
         return list(np.random.randn(self.dimension).tolist())
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate random embeddings for multiple texts."""
+        results = []
+        for text in texts:
+            seed = hash(text) % (2**32)
+            np.random.seed(seed)
+            results.append(list(np.random.randn(self.dimension).tolist()))
+        return results
 
     def get_dimension(self) -> int:
         return int(self.dimension)
@@ -388,4 +485,16 @@ async def embed_text(text: str) -> list[float]:
     """Convenience function to embed text using the current provider."""
     provider = get_embedding_provider()
     return await provider.embed(text)
+
+
+async def embed_texts_batch(texts: list[str]) -> list[list[float]]:
+    """Convenience function to embed multiple texts using the current provider.
+    
+    This uses batch embedding which is significantly faster than sequential calls
+    for most providers (OpenAI, Cohere, SentenceTransformer).
+    """
+    if not texts:
+        return []
+    provider = get_embedding_provider()
+    return await provider.embed_batch(texts)
 

@@ -29,6 +29,13 @@ class DiversityManager:
         self.species: dict[str, list[str]] = {}  # species_id -> idea_ids
         self.idea_species: dict[str, str] = {}  # idea_id -> species_id
         self.species_representatives: dict[str, np.ndarray] = {}  # species_id -> embedding
+        
+        # Species counter for unique naming
+        self._species_counter: int = 0
+        
+        # Cache for similarity calculations
+        self._similarity_cache: dict[tuple[str, str], float] = {}
+        self._cache_size_limit: int = 10000
 
     def calculate_diversity_metrics(
         self,
@@ -198,6 +205,91 @@ class DiversityManager:
                 )
 
         return species_dict
+    
+    def apply_incremental_speciation(
+        self,
+        new_ideas: list[Idea],
+        embeddings: dict[str, np.ndarray]
+    ) -> dict[str, list[Idea]]:
+        """Incrementally assign new ideas to species without full reclustering.
+        
+        This is much faster than full DBSCAN clustering for adding new ideas
+        to an existing population with established species.
+        """
+        if not self.species_representatives:
+            # No existing species, fall back to full clustering
+            return self.apply_speciation(new_ideas, embeddings)
+        
+        species_dict = defaultdict(list)
+        
+        for idea in new_ideas:
+            if idea.id not in embeddings:
+                # No embedding, assign to outlier species
+                species_id = "species_outlier"
+            else:
+                idea_embedding = embeddings[idea.id]
+                
+                # Find closest species representative
+                best_species = None
+                best_similarity = -1
+                
+                for species_id, rep_embedding in self.species_representatives.items():
+                    # Use cached similarity if available
+                    cache_key = (idea.id, species_id)
+                    if cache_key in self._similarity_cache:
+                        similarity = self._similarity_cache[cache_key]
+                    else:
+                        similarity = cosine_similarity(
+                            idea_embedding.reshape(1, -1),
+                            rep_embedding.reshape(1, -1)
+                        )[0, 0]
+                        # Cache the result
+                        if len(self._similarity_cache) < self._cache_size_limit:
+                            self._similarity_cache[cache_key] = similarity
+                    
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        best_species = species_id
+                
+                # Check if close enough to join existing species
+                if best_similarity >= (1 - self.niche_radius):
+                    species_id = best_species
+                else:
+                    # Create new species
+                    self._species_counter += 1
+                    species_id = f"species_{self._species_counter}"
+                    self.species_representatives[species_id] = idea_embedding
+            
+            species_dict[species_id].append(idea)
+            self.idea_species[idea.id] = species_id
+            
+            # Update species tracking
+            if species_id not in self.species:
+                self.species[species_id] = []
+            self.species[species_id].append(idea.id)
+        
+        # Update representatives with new members (moving average)
+        for species_id, ideas in species_dict.items():
+            if species_id == "species_outlier":
+                continue
+            
+            new_embeddings = [
+                embeddings[idea.id] for idea in ideas
+                if idea.id in embeddings
+            ]
+            
+            if new_embeddings and species_id in self.species_representatives:
+                old_rep = self.species_representatives[species_id]
+                new_mean = np.mean(new_embeddings, axis=0)
+                # Exponential moving average to update representative
+                alpha = min(0.3, len(new_embeddings) / 10)  # Adapt based on number of new members
+                self.species_representatives[species_id] = (1 - alpha) * old_rep + alpha * new_mean
+        
+        return species_dict
+    
+    def clear_similarity_cache(self) -> None:
+        """Clear the similarity cache to free memory."""
+        self._similarity_cache.clear()
 
     def calculate_crowding_distance(
         self,

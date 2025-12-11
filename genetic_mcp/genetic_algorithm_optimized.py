@@ -285,6 +285,131 @@ class OptimizedGeneticAlgorithm:
 
         return offspring1, offspring2
 
+    async def batch_crossover(
+        self,
+        parent_pairs: list[tuple[Idea, Idea]],
+        generation: int = 0,
+        batch_size: int = 5
+    ) -> list[tuple[str, str]]:
+        """Perform batch crossover to reduce LLM calls.
+        
+        Combines multiple crossover operations into fewer LLM calls for efficiency.
+        Falls back to individual calls for small batches or when LLM is unavailable.
+        """
+        if not parent_pairs:
+            return []
+        
+        # For small batches or no LLM, use individual crossovers
+        if len(parent_pairs) < 3 or not self.llm_client:
+            results = []
+            for p1, p2 in parent_pairs:
+                result = await self.semantic_crossover(p1, p2)
+                results.append(result)
+            return results
+        
+        # Process in batches
+        results = []
+        for i in range(0, len(parent_pairs), batch_size):
+            batch = parent_pairs[i:i + batch_size]
+            
+            if len(batch) >= 3:
+                # Use batch LLM call
+                batch_results = await self._batch_crossover_llm(batch)
+                results.extend(batch_results)
+            else:
+                # Individual calls for small remaining batch
+                for p1, p2 in batch:
+                    result = await self.semantic_crossover(p1, p2)
+                    results.append(result)
+        
+        return results
+    
+    async def _batch_crossover_llm(
+        self,
+        parent_pairs: list[tuple[Idea, Idea]]
+    ) -> list[tuple[str, str]]:
+        """Execute batch crossover using a single LLM call."""
+        # Build combined prompt
+        prompt_parts = ["You are performing genetic algorithm crossover on multiple idea pairs.\n"]
+        prompt_parts.append("For each pair, create two offspring by combining concepts from both parents.\n\n")
+        
+        for idx, (p1, p2) in enumerate(parent_pairs):
+            # Truncate long content to fit in context
+            p1_content = p1.content[:500] + "..." if len(p1.content) > 500 else p1.content
+            p2_content = p2.content[:500] + "..." if len(p2.content) > 500 else p2.content
+            
+            prompt_parts.append(f"PAIR_{idx}:\n")
+            prompt_parts.append(f"Parent_A: {p1_content}\n")
+            prompt_parts.append(f"Parent_B: {p2_content}\n\n")
+        
+        prompt_parts.append("\nFor each pair, respond with:\n")
+        prompt_parts.append("PAIR_X_OFFSPRING_1: [content emphasizing Parent_A concepts]\n")
+        prompt_parts.append("PAIR_X_OFFSPRING_2: [content emphasizing Parent_B concepts]\n")
+        
+        combined_prompt = "".join(prompt_parts)
+        
+        try:
+            temperature = round(random.uniform(0.6, 0.8), 2)
+            response = await self.llm_client.generate(
+                combined_prompt,
+                temperature=temperature,
+                max_tokens=3000
+            )
+            
+            # Parse batch response
+            results = self._parse_batch_crossover_response(response, len(parent_pairs))
+            
+            # If parsing failed for some pairs, fill with simple crossover
+            while len(results) < len(parent_pairs):
+                idx = len(results)
+                p1, p2 = parent_pairs[idx]
+                results.append(self._simple_crossover(p1, p2))
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Batch crossover LLM call failed: {e}")
+            # Fallback to simple crossover for all pairs
+            return [self._simple_crossover(p1, p2) for p1, p2 in parent_pairs]
+    
+    def _parse_batch_crossover_response(
+        self,
+        response: str,
+        expected_pairs: int
+    ) -> list[tuple[str, str]]:
+        """Parse the batch crossover response from LLM."""
+        results = []
+        lines = response.strip().split('\n')
+        
+        current_pair_offspring = {}
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Try to match PAIR_X_OFFSPRING_Y pattern
+            for pair_idx in range(expected_pairs):
+                if line.startswith(f"PAIR_{pair_idx}_OFFSPRING_1:"):
+                    content = line.replace(f"PAIR_{pair_idx}_OFFSPRING_1:", "").strip()
+                    if pair_idx not in current_pair_offspring:
+                        current_pair_offspring[pair_idx] = {}
+                    current_pair_offspring[pair_idx]['offspring1'] = content
+                elif line.startswith(f"PAIR_{pair_idx}_OFFSPRING_2:"):
+                    content = line.replace(f"PAIR_{pair_idx}_OFFSPRING_2:", "").strip()
+                    if pair_idx not in current_pair_offspring:
+                        current_pair_offspring[pair_idx] = {}
+                    current_pair_offspring[pair_idx]['offspring2'] = content
+        
+        # Collect results in order
+        for pair_idx in range(expected_pairs):
+            if pair_idx in current_pair_offspring:
+                pair_data = current_pair_offspring[pair_idx]
+                offspring1 = pair_data.get('offspring1', '')
+                offspring2 = pair_data.get('offspring2', '')
+                if offspring1 and offspring2:
+                    results.append((offspring1, offspring2))
+        
+        return results
+
     async def adaptive_mutation(self, content: str, generation: int, idea: Idea | None = None, all_ideas: list[Idea] | None = None) -> str:
         """Adaptive mutation with intelligent strategies when enabled."""
         # Use intelligent mutation if enabled and idea is provided
@@ -321,6 +446,135 @@ class OptimizedGeneticAlgorithm:
             logger.error(f"Intelligent mutation failed for idea {idea.id}: {e}")
             # Fallback to legacy mutation
             return await self._legacy_adaptive_mutation(idea.content, generation)
+
+    async def batch_mutation(
+        self,
+        ideas: list[Idea],
+        generation: int,
+        all_ideas: list[Idea] | None = None,
+        batch_size: int = 5
+    ) -> list[str]:
+        """Perform batch mutation to reduce LLM calls.
+        
+        Combines multiple mutation operations into fewer LLM calls.
+        """
+        if not ideas:
+            return []
+        
+        # Determine which ideas should mutate based on mutation rate
+        self._update_adaptive_rates()
+        
+        to_mutate = []
+        no_mutate = []
+        mutation_indices = []
+        
+        for idx, idea in enumerate(ideas):
+            if random.random() <= self.adaptive_mutation_rate:
+                to_mutate.append(idea)
+                mutation_indices.append(idx)
+            else:
+                no_mutate.append((idx, idea.content))
+        
+        # If few mutations, use individual calls
+        if len(to_mutate) < 3 or not self.llm_client:
+            results = [None] * len(ideas)
+            for idx, idea in enumerate(ideas):
+                mutated = await self.adaptive_mutation(
+                    idea.content, generation, idea, all_ideas
+                )
+                results[idx] = mutated
+            return results
+        
+        # Process mutations in batches
+        mutated_contents = []
+        for i in range(0, len(to_mutate), batch_size):
+            batch = to_mutate[i:i + batch_size]
+            
+            if len(batch) >= 3:
+                batch_results = await self._batch_mutation_llm(batch, generation)
+                mutated_contents.extend(batch_results)
+            else:
+                for idea in batch:
+                    mutated = await self.adaptive_mutation(
+                        idea.content, generation, idea, all_ideas
+                    )
+                    mutated_contents.append(mutated)
+        
+        # Reassemble results in original order
+        results = [None] * len(ideas)
+        
+        # Add non-mutated ideas
+        for idx, content in no_mutate:
+            results[idx] = content
+        
+        # Add mutated ideas
+        for i, idx in enumerate(mutation_indices):
+            if i < len(mutated_contents):
+                results[idx] = mutated_contents[i]
+            else:
+                results[idx] = ideas[idx].content
+        
+        return results
+    
+    async def _batch_mutation_llm(
+        self,
+        ideas: list[Idea],
+        generation: int
+    ) -> list[str]:
+        """Execute batch mutation using a single LLM call."""
+        # Choose mutation type based on generation
+        if generation < 3:
+            mutation_type = "exploratory and creative"
+        elif self.metrics.stagnation_counter > 3:
+            mutation_type = "disruptive and innovative"
+        else:
+            mutation_type = "refinement and improvement"
+        
+        prompt_parts = [
+            f"Apply {mutation_type} mutations to the following ideas.\n",
+            "Each mutation should modify the idea while preserving its core value.\n\n"
+        ]
+        
+        for idx, idea in enumerate(ideas):
+            content = idea.content[:400] + "..." if len(idea.content) > 400 else idea.content
+            prompt_parts.append(f"IDEA_{idx}: {content}\n")
+        
+        prompt_parts.append("\nRespond with mutated versions:\n")
+        prompt_parts.append("MUTATED_0: [mutated content]\n")
+        prompt_parts.append("MUTATED_1: [mutated content]\n")
+        prompt_parts.append("etc.\n")
+        
+        combined_prompt = "".join(prompt_parts)
+        
+        try:
+            temperature = round(random.uniform(0.7, 0.9), 2)
+            response = await self.llm_client.generate(
+                combined_prompt,
+                temperature=temperature,
+                max_tokens=2500
+            )
+            
+            # Parse response
+            results = []
+            lines = response.strip().split('\n')
+            
+            for idx in range(len(ideas)):
+                found = False
+                for line in lines:
+                    if line.strip().startswith(f"MUTATED_{idx}:"):
+                        content = line.replace(f"MUTATED_{idx}:", "").strip()
+                        if content:
+                            results.append(content)
+                            found = True
+                            break
+                if not found:
+                    results.append(ideas[idx].content)  # No mutation found, keep original
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Batch mutation LLM call failed: {e}")
+            return [idea.content for idea in ideas]
 
     async def _legacy_adaptive_mutation(self, content: str, generation: int) -> str:
         """Legacy adaptive mutation with multiple operators."""
